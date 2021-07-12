@@ -65,7 +65,7 @@ var TransformCommand = /** @class */ (function (_super) {
     }
     TransformCommand.prototype.run = function () {
         return __awaiter(this, void 0, void 0, function () {
-            var flags, wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadata, modules, _loop_1, _i, storageItems_1, key, at, lastHdr, state, err_1;
+            var flags, wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadata, modules, _loop_1, _i, storageItems_1, key, at, lastHdr;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
@@ -125,15 +125,12 @@ var TransformCommand = /** @class */ (function (_super) {
                         at = this.fromApi.createType("Hash", flags["at-block"]);
                         _a.label = 6;
                     case 6:
-                        _a.trys.push([6, 8, , 9]);
-                        return [4 /*yield*/, transform(this.fromApi, this.toApi, storageItems, at)];
-                    case 7:
-                        state = _a.sent();
-                        return [3 /*break*/, 9];
-                    case 8:
-                        err_1 = _a.sent();
-                        return [3 /*break*/, 9];
-                    case 9:
+                        try {
+                            //let state = await transform(this.fromApi, this.toApi, storageItems, at, at); // TODO: add actual to hash from parachain
+                        }
+                        catch (err) {
+                            // TODO: Do something with the error
+                        }
                         if (flags["as-genesis"]) {
                             // TODO: Here the stuff to
                             //       * create specs for forked chain
@@ -186,87 +183,192 @@ var TransformCommand = /** @class */ (function (_super) {
     return TransformCommand;
 }(command_1.default));
 exports.default = TransformCommand;
-function transform(fromApi, toApi, storageItems, at) {
+function transform(fromApi, toApi, storageItems, atFrom, atTo) {
     return __awaiter(this, void 0, void 0, function () {
-        var forkData, _a, _b, state, _i, forkData_1, _c, prefix, keyValues, migratedPalletStorageItems, migratedPalletStorageItems, migratedPalletStorageItems;
+        var forkData, _a, _b, state, _i, forkData_1, _c, key, keyValues, palletKey, migratedPalletStorageItems, palletKey, migratedPalletStorageItems, palletKey, migratedPalletStorageItems, palletKey, migratedPalletStorageItems;
         return __generator(this, function (_d) {
             switch (_d.label) {
                 case 0:
                     _b = (_a = Array).from;
-                    return [4 /*yield*/, fork_1.fork(fromApi, storageItems, at)];
+                    return [4 /*yield*/, fork_1.fork(fromApi, storageItems, atFrom)];
                 case 1:
                     forkData = _b.apply(_a, [_d.sent()]);
                     state = new Map();
                     _i = 0, forkData_1 = forkData;
                     _d.label = 2;
                 case 2:
-                    if (!(_i < forkData_1.length)) return [3 /*break*/, 10];
-                    _c = forkData_1[_i], prefix = _c[0], keyValues = _c[1];
-                    if (!prefix.startsWith(util_crypto_1.xxhashAsHex("System", 128))) return [3 /*break*/, 4];
+                    if (!(_i < forkData_1.length)) return [3 /*break*/, 12];
+                    _c = forkData_1[_i], key = _c[0], keyValues = _c[1];
+                    if (!key.startsWith(util_crypto_1.xxhashAsHex("System", 128))) return [3 /*break*/, 4];
+                    palletKey = util_crypto_1.xxhashAsHex("System", 128);
                     return [4 /*yield*/, transformSystem(fromApi, toApi, keyValues)];
                 case 3:
                     migratedPalletStorageItems = _d.sent();
-                    state.set(prefix, migratedPalletStorageItems);
-                    return [3 /*break*/, 9];
+                    state.set(palletKey, migratedPalletStorageItems);
+                    return [3 /*break*/, 11];
                 case 4:
-                    if (!prefix.startsWith(util_crypto_1.xxhashAsHex("Balances", 128))) return [3 /*break*/, 6];
+                    if (!key.startsWith(util_crypto_1.xxhashAsHex("Balances", 128))) return [3 /*break*/, 6];
+                    palletKey = util_crypto_1.xxhashAsHex("Balances", 128);
                     return [4 /*yield*/, transformBalances(fromApi, toApi, keyValues)];
                 case 5:
                     migratedPalletStorageItems = _d.sent();
-                    state.set(prefix, migratedPalletStorageItems);
-                    return [3 /*break*/, 9];
+                    state.set(palletKey, migratedPalletStorageItems);
+                    return [3 /*break*/, 11];
                 case 6:
-                    if (!prefix.startsWith(util_crypto_1.xxhashAsHex("Vesting", 128))) return [3 /*break*/, 8];
-                    return [4 /*yield*/, transformVesting(fromApi, toApi, keyValues, at)];
+                    if (!key.startsWith(util_crypto_1.xxhashAsHex("Vesting", 128))) return [3 /*break*/, 8];
+                    palletKey = util_crypto_1.xxhashAsHex("Vesting", 128);
+                    return [4 /*yield*/, transformVesting(fromApi, toApi, keyValues, atFrom, atTo)];
                 case 7:
                     migratedPalletStorageItems = _d.sent();
-                    state.set(prefix, migratedPalletStorageItems);
-                    return [3 /*break*/, 9];
+                    state.set(palletKey, migratedPalletStorageItems);
+                    return [3 /*break*/, 11];
                 case 8:
-                    console.log("Fetched data that can not be transformed. PatriciaKey is: " + prefix);
-                    _d.label = 9;
+                    if (!key.startsWith(util_crypto_1.xxhashAsHex("Proxy", 128))) return [3 /*break*/, 10];
+                    palletKey = util_crypto_1.xxhashAsHex("Proxy", 128);
+                    return [4 /*yield*/, transformProxy(fromApi, toApi, keyValues)];
                 case 9:
+                    migratedPalletStorageItems = _d.sent();
+                    state.set(palletKey, migratedPalletStorageItems);
+                    return [3 /*break*/, 11];
+                case 10:
+                    console.log("Fetched data that can not be transformed. PatriciaKey is: " + key);
+                    _d.label = 11;
+                case 11:
                     _i++;
                     return [3 /*break*/, 2];
-                case 10: return [2 /*return*/, state];
+                case 12: return [2 /*return*/, state];
             }
         });
     });
 }
 exports.transform = transform;
-function transformSystem(fromApi, toApi, keyValues) {
+function transformProxy(fromApi, toApi, keyValues) {
     return __awaiter(this, void 0, void 0, function () {
-        var state, _i, keyValues_1, _a, patriciaKey, value, hex, _b, systemAccount, pkStorageItem, _c, _d;
-        return __generator(this, function (_e) {
-            switch (_e.label) {
+        var state, _i, keyValues_1, _a, patriciaKey, value, pkStorageItem, _b, _c;
+        return __generator(this, function (_d) {
+            switch (_d.label) {
                 case 0:
                     state = new Map();
                     _i = 0, keyValues_1 = keyValues;
-                    _e.label = 1;
+                    _d.label = 1;
                 case 1:
-                    if (!(_i < keyValues_1.length)) return [3 /*break*/, 7];
+                    if (!(_i < keyValues_1.length)) return [3 /*break*/, 6];
                     _a = keyValues_1[_i], patriciaKey = _a[0], value = _a[1];
-                    _b = '0x';
-                    return [4 /*yield*/, common_1.toHexString(patriciaKey)];
-                case 2:
-                    hex = _b + (_e.sent());
-                    systemAccount = util_crypto_1.xxhashAsHex("System", 128) + util_crypto_1.xxhashAsHex("Account", 128).slice(2);
-                    if (!hex.startsWith(systemAccount)) return [3 /*break*/, 5];
-                    pkStorageItem = util_crypto_1.xxhashAsHex("System", 128) + util_crypto_1.xxhashAsHex("Account", 128).slice(2);
-                    _c = common_1.insertOrNewMap;
-                    _d = [state, pkStorageItem];
-                    return [4 /*yield*/, transformSystemAccount(fromApi, toApi, patriciaKey, value)];
-                case 3: return [4 /*yield*/, _c.apply(void 0, _d.concat([_e.sent()]))];
+                    if (!patriciaKey.toHex().startsWith(util_crypto_1.xxhashAsHex("Proxy", 128) + util_crypto_1.xxhashAsHex("Proxies", 128).slice(2))) return [3 /*break*/, 4];
+                    pkStorageItem = util_crypto_1.xxhashAsHex("Proxy", 128) + util_crypto_1.xxhashAsHex("Proxies", 128).slice(2);
+                    _b = common_1.insertOrNewMap;
+                    _c = [state, pkStorageItem];
+                    return [4 /*yield*/, transformProxyProxies(fromApi, toApi, patriciaKey, value)];
+                case 2: return [4 /*yield*/, _b.apply(void 0, _c.concat([_d.sent()]))];
+                case 3:
+                    _d.sent();
+                    return [3 /*break*/, 5];
                 case 4:
-                    _e.sent();
-                    return [3 /*break*/, 6];
+                    console.log("Fetched data that can not be transformed. PatriciaKey is: " + patriciaKey.toHuman());
+                    _d.label = 5;
                 case 5:
-                    console.log("Fetched data that can not be transformed. PatriciaKey is: " + hex);
-                    _e.label = 6;
-                case 6:
                     _i++;
                     return [3 /*break*/, 1];
-                case 7: return [2 /*return*/, state];
+                case 6: return [2 /*return*/, state];
+            }
+        });
+    });
+}
+function transformProxyProxies(fromApi, toApi, completeKey, scaleOldProxies) {
+    return __awaiter(this, void 0, void 0, function () {
+        var oldProxyInfo, proxies, CINC, CINCisDelegate, _i, _a, oldElement, delegate, proxyType, delay, proxyDef, deposit, newProxyInfo, proxiedAccount, _b, nonce, balance, base, perProxy, reserve, amount, amount;
+        return __generator(this, function (_c) {
+            switch (_c.label) {
+                case 0:
+                    oldProxyInfo = fromApi.createType('(Vec<(AccountId, ProxyType)>, Balance)', scaleOldProxies);
+                    proxies = new Array();
+                    CINC = fromApi.createType("AccountId", "4djGpfJtHkS3kXBNtSFijf8xHbBY8mYvnUR7zrLM9bCyF7Js");
+                    CINCisDelegate = false;
+                    // 1. Iterate over all elements of the vector
+                    // 2. Create a `ProxyDefinition` for each element
+                    for (_i = 0, _a = oldProxyInfo[0]; _i < _a.length; _i++) {
+                        oldElement = _a[_i];
+                        delegate = toApi.createType("AccountId", oldElement[0]);
+                        if (CINC.toHex() === delegate.toHex()) {
+                            CINCisDelegate = true;
+                        }
+                        proxyType = toApi.createType("ProxyType", oldElement[1]);
+                        delay = toApi.createType("BlockNumber", 0);
+                        proxyDef = toApi.createType("ProxyDefinition", [
+                            delegate,
+                            proxyType,
+                            delay
+                        ]);
+                        proxies.push(proxyDef);
+                    }
+                    deposit = toApi.createType("Balance", oldProxyInfo[1]);
+                    newProxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', [
+                        proxies,
+                        deposit
+                    ]);
+                    proxiedAccount = fromApi.createType("AccountId", completeKey.slice(-32));
+                    return [4 /*yield*/, fromApi.query.system.account(proxiedAccount)];
+                case 1:
+                    _b = _c.sent(), nonce = _b.nonce, balance = _b.data;
+                    return [4 /*yield*/, fromApi.consts.proxy.proxyDepositBase];
+                case 2:
+                    base = _c.sent();
+                    return [4 /*yield*/, fromApi.consts.proxy.proxyDepositFactor];
+                case 3:
+                    perProxy = _c.sent();
+                    // In the case that we see that the amount reserved is smaller than 350 mCFG, we can be sure, that this
+                    // is an anonymous proxy. The reverse does not prove the non-existence of an anonymous proxy!
+                    // Hence, we must ensure, that we subtract 350 mCFg from the deposit, as this one is reserved on the creator!
+                    if (balance.reserved.toBigInt() < (BigInt(proxies.length) * perProxy.toBigInt()) + base.toBigInt()) {
+                        amount = deposit.toBigInt() - (perProxy.toBigInt() + base.toBigInt());
+                        reserve = toApi.createType("Balance", amount);
+                        console.log("Anonymous detected. Reserving: " + reserve.toHuman() + " CINC is: " + CINCisDelegate);
+                    }
+                    else if (CINCisDelegate) {
+                        amount = deposit.toBigInt() - (perProxy.toBigInt() + base.toBigInt());
+                        reserve = toApi.createType("Balance", amount);
+                        console.log("Anonymous detected. Reserving: " + reserve.toHuman() + " CINC is: " + CINCisDelegate);
+                    }
+                    else {
+                        reserve = toApi.createType("Balance", deposit);
+                        console.log("Non-Anonymous detected. Reserving: " + reserve.toHuman() + " CINC is: " + CINCisDelegate);
+                        console.log("Balance of this proxy is: " + balance.free.toHuman() + " " + balance.reserved.toHuman());
+                    }
+                    console.log("----------------------------");
+                    return [2 /*return*/, new StorageMapValue(newProxyInfo.toU8a(), completeKey, reserve)];
+            }
+        });
+    });
+}
+function transformSystem(fromApi, toApi, keyValues) {
+    return __awaiter(this, void 0, void 0, function () {
+        var state, _i, keyValues_2, _a, patriciaKey, value, systemAccount, pkStorageItem, _b, _c;
+        return __generator(this, function (_d) {
+            switch (_d.label) {
+                case 0:
+                    state = new Map();
+                    _i = 0, keyValues_2 = keyValues;
+                    _d.label = 1;
+                case 1:
+                    if (!(_i < keyValues_2.length)) return [3 /*break*/, 6];
+                    _a = keyValues_2[_i], patriciaKey = _a[0], value = _a[1];
+                    systemAccount = util_crypto_1.xxhashAsHex("System", 128) + util_crypto_1.xxhashAsHex("Account", 128).slice(2);
+                    if (!patriciaKey.toHex().startsWith(systemAccount)) return [3 /*break*/, 4];
+                    pkStorageItem = util_crypto_1.xxhashAsHex("System", 128) + util_crypto_1.xxhashAsHex("Account", 128).slice(2);
+                    _b = common_1.insertOrNewMap;
+                    _c = [state, pkStorageItem];
+                    return [4 /*yield*/, transformSystemAccount(fromApi, toApi, patriciaKey, value)];
+                case 2: return [4 /*yield*/, _b.apply(void 0, _c.concat([_d.sent()]))];
+                case 3:
+                    _d.sent();
+                    return [3 /*break*/, 5];
+                case 4:
+                    console.log("Fetched data that can not be transformed. PatriciaKey is: " + patriciaKey.toHuman());
+                    _d.label = 5;
+                case 5:
+                    _i++;
+                    return [3 /*break*/, 1];
+                case 6: return [2 /*return*/, state];
             }
         });
     });
@@ -303,36 +405,32 @@ function transformSystemAccount(fromApi, toApi, completeKey, scaleOldAccountInfo
 }
 function transformBalances(fromApi, toApi, keyValues) {
     return __awaiter(this, void 0, void 0, function () {
-        var state, _i, keyValues_2, _a, patriciaKey, value, hex, _b, pkStorageItem, _c, _d;
-        return __generator(this, function (_e) {
-            switch (_e.label) {
+        var state, _i, keyValues_3, _a, patriciaKey, value, pkStorageItem, _b, _c;
+        return __generator(this, function (_d) {
+            switch (_d.label) {
                 case 0:
                     state = new Map();
-                    _i = 0, keyValues_2 = keyValues;
-                    _e.label = 1;
+                    _i = 0, keyValues_3 = keyValues;
+                    _d.label = 1;
                 case 1:
-                    if (!(_i < keyValues_2.length)) return [3 /*break*/, 7];
-                    _a = keyValues_2[_i], patriciaKey = _a[0], value = _a[1];
-                    _b = '0x';
-                    return [4 /*yield*/, common_1.toHexString(patriciaKey)];
-                case 2:
-                    hex = _b + (_e.sent());
-                    if (!hex.startsWith(util_crypto_1.xxhashAsHex("Balances", 128) + util_crypto_1.xxhashAsHex("TotalIssuance", 128).slice(2))) return [3 /*break*/, 5];
+                    if (!(_i < keyValues_3.length)) return [3 /*break*/, 6];
+                    _a = keyValues_3[_i], patriciaKey = _a[0], value = _a[1];
+                    if (!patriciaKey.toHex().startsWith(util_crypto_1.xxhashAsHex("Balances", 128) + util_crypto_1.xxhashAsHex("TotalIssuance", 128).slice(2))) return [3 /*break*/, 4];
                     pkStorageItem = util_crypto_1.xxhashAsHex("Balances", 128) + util_crypto_1.xxhashAsHex("TotalIssuance", 128).slice(2);
-                    _c = common_1.insertOrNewMap;
-                    _d = [state, pkStorageItem];
+                    _b = common_1.insertOrNewMap;
+                    _c = [state, pkStorageItem];
                     return [4 /*yield*/, transformBalancesTotalIssuance(fromApi, toApi, patriciaKey, value)];
-                case 3: return [4 /*yield*/, _c.apply(void 0, _d.concat([_e.sent()]))];
+                case 2: return [4 /*yield*/, _b.apply(void 0, _c.concat([_d.sent()]))];
+                case 3:
+                    _d.sent();
+                    return [3 /*break*/, 5];
                 case 4:
-                    _e.sent();
-                    return [3 /*break*/, 6];
+                    console.log("Fetched data that can not be transformed. Part of Balances. PatriciaKey is: " + patriciaKey.toHex());
+                    _d.label = 5;
                 case 5:
-                    console.log("Fetched data that can not be transformed. PatriciaKey is: " + hex);
-                    _e.label = 6;
-                case 6:
                     _i++;
                     return [3 /*break*/, 1];
-                case 7: return [2 /*return*/, state];
+                case 6: return [2 /*return*/, state];
             }
         });
     });
@@ -350,46 +448,43 @@ function transformBalancesTotalIssuance(fromApi, toApi, completeKey, scaleOldTot
         });
     });
 }
-function transformVesting(fromApi, toApi, keyValues, at) {
+function transformVesting(fromApi, toApi, keyValues, atFrom, atTo) {
     return __awaiter(this, void 0, void 0, function () {
-        var state, atAsNumber, _i, keyValues_3, _a, patriciaKey, value, hex, _b, pkStorageItem, _c, _d;
-        return __generator(this, function (_e) {
-            switch (_e.label) {
+        var state, atFromAsNumber, atToAsNumber, _i, keyValues_4, _a, patriciaKey, value, pkStorageItem, _b, _c;
+        return __generator(this, function (_d) {
+            switch (_d.label) {
                 case 0:
                     state = new Map();
-                    return [4 /*yield*/, fromApi.rpc.chain.getBlock(at)];
+                    return [4 /*yield*/, fromApi.rpc.chain.getBlock(atFrom)];
                 case 1:
-                    atAsNumber = (_e.sent()).block.header.number.toBigInt();
-                    _i = 0, keyValues_3 = keyValues;
-                    _e.label = 2;
+                    atFromAsNumber = (_d.sent()).block.header.number.toBigInt();
+                    atToAsNumber = BigInt(0);
+                    _i = 0, keyValues_4 = keyValues;
+                    _d.label = 2;
                 case 2:
-                    if (!(_i < keyValues_3.length)) return [3 /*break*/, 8];
-                    _a = keyValues_3[_i], patriciaKey = _a[0], value = _a[1];
-                    _b = '0x';
-                    return [4 /*yield*/, common_1.toHexString(patriciaKey)];
-                case 3:
-                    hex = _b + (_e.sent());
-                    if (!hex.startsWith(util_crypto_1.xxhashAsHex("Vesting", 128) + util_crypto_1.xxhashAsHex("Vesting", 128).slice(2))) return [3 /*break*/, 6];
+                    if (!(_i < keyValues_4.length)) return [3 /*break*/, 7];
+                    _a = keyValues_4[_i], patriciaKey = _a[0], value = _a[1];
+                    if (!patriciaKey.toHex().startsWith(util_crypto_1.xxhashAsHex("Vesting", 128) + util_crypto_1.xxhashAsHex("Vesting", 128).slice(2))) return [3 /*break*/, 5];
                     pkStorageItem = util_crypto_1.xxhashAsHex("Vesting", 128) + util_crypto_1.xxhashAsHex("Vesting", 128).slice(2);
-                    _c = common_1.insertOrNewMap;
-                    _d = [state, pkStorageItem];
-                    return [4 /*yield*/, transformVestingVestingInfo(fromApi, toApi, patriciaKey, value, atAsNumber)];
-                case 4: return [4 /*yield*/, _c.apply(void 0, _d.concat([_e.sent()]))];
+                    _b = common_1.insertOrNewMap;
+                    _c = [state, pkStorageItem];
+                    return [4 /*yield*/, transformVestingVestingInfo(fromApi, toApi, patriciaKey, value, atFromAsNumber, atToAsNumber)];
+                case 3: return [4 /*yield*/, _b.apply(void 0, _c.concat([_d.sent()]))];
+                case 4:
+                    _d.sent();
+                    return [3 /*break*/, 6];
                 case 5:
-                    _e.sent();
-                    return [3 /*break*/, 7];
+                    console.log("Fetched data that can not be transformed. PatriciaKey is: " + patriciaKey.toHuman());
+                    _d.label = 6;
                 case 6:
-                    console.log("Fetched data that can not be transformed. PatriciaKey is: " + hex);
-                    _e.label = 7;
-                case 7:
                     _i++;
                     return [3 /*break*/, 2];
-                case 8: return [2 /*return*/, state];
+                case 7: return [2 /*return*/, state];
             }
         });
     });
 }
-function transformVestingVestingInfo(fromApi, toApi, completeKey, scaleOldVestingInfo, at) {
+function transformVestingVestingInfo(fromApi, toApi, completeKey, scaleOldVestingInfo, atFrom, atTo) {
     return __awaiter(this, void 0, void 0, function () {
         var old, remainingLocked, newPerBlock, newStartingBlock, blockPeriodOldVesting, blocksPassedSinceVestingStart, remainingBlocks, newVesting;
         return __generator(this, function (_a) {
@@ -397,27 +492,27 @@ function transformVestingVestingInfo(fromApi, toApi, completeKey, scaleOldVestin
                 case 0:
                     old = fromApi.createType("VestingInfo", scaleOldVestingInfo);
                     blockPeriodOldVesting = (old.locked.toBigInt() / old.perBlock.toBigInt());
-                    blocksPassedSinceVestingStart = (at - old.startingBlock.toBigInt());
+                    blocksPassedSinceVestingStart = (atFrom - old.startingBlock.toBigInt());
                     // We need to check if vesting is ongoing, is finished or has not yet started, as conversion will be different.
                     if (blocksPassedSinceVestingStart > 0 && (blockPeriodOldVesting - blocksPassedSinceVestingStart) > 0) {
                         remainingBlocks = (blockPeriodOldVesting - blocksPassedSinceVestingStart) / BigInt(2);
                         // This defines the remaining locked amount. Same as if a person has called vest once at the snapshot block.
                         remainingLocked = old.locked.toBigInt() - (blocksPassedSinceVestingStart * old.perBlock.toBigInt());
                         newPerBlock = remainingLocked / remainingBlocks;
-                        newStartingBlock = BigInt(0);
+                        newStartingBlock = atTo;
                     }
                     else if ((blockPeriodOldVesting - blocksPassedSinceVestingStart) <= 0) {
                         // If vesting is finished -> use same start block and give everything at first block
                         remainingLocked = old.locked.toBigInt();
                         newPerBlock = old.locked.toBigInt();
-                        newStartingBlock = BigInt(0);
+                        newStartingBlock = atTo;
                     }
-                    else if ((old.startingBlock.toBigInt() - at) >= 0) {
-                        // If vesting has not started yes -> use same start block and multiply per block by 2 to take into account
+                    else if ((old.startingBlock.toBigInt() - atFrom) >= 0) {
+                        // If vesting has not started yes -> use starting block as (old - blocks_passed_on_old_mainnet) / 2 and multiply per block by 2 to take into account
                         // 12s block time.
                         remainingLocked = old.locked.toBigInt();
                         newPerBlock = old.perBlock.toBigInt() * BigInt(2);
-                        newStartingBlock = old.startingBlock.toBigInt() - at;
+                        newStartingBlock = ((old.startingBlock.toBigInt() - atFrom) / BigInt(2)) + atTo;
                     }
                     else {
                         throw Error("Unreachable code... Came here with old vesting info of: " + old.toHuman());
@@ -447,8 +542,9 @@ var StorageValueValue = /** @class */ (function (_super) {
 exports.StorageValueValue = StorageValueValue;
 var StorageMapValue = /** @class */ (function (_super) {
     __extends(StorageMapValue, _super);
-    function StorageMapValue(value, key) {
+    function StorageMapValue(value, key, optional) {
         var _this = _super.call(this, value) || this;
+        _this.optional = optional;
         _this.patriciaKey = key;
         return _this;
     }
@@ -468,32 +564,32 @@ var StorageDoubleMapValue = /** @class */ (function (_super) {
 exports.StorageDoubleMapValue = StorageDoubleMapValue;
 function test_run() {
     return __awaiter(this, void 0, void 0, function () {
-        var wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadataFrom, metadataTo, _loop_2, _i, storageItems_2, key, lastHdr, at, migrationData;
-        return __generator(this, function (_a) {
-            switch (_a.label) {
+        var wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadataFrom, metadataTo, _loop_2, _i, storageItems_2, key, lastHdr, at, to, keyItems, _a, storageItems_3, stringKey, migrationData;
+        return __generator(this, function (_b) {
+            switch (_b.label) {
                 case 0:
                     wsProviderFrom = new api_1.WsProvider("wss://fullnode.centrifuge.io");
                     return [4 /*yield*/, api_1.ApiPromise.create({
                             provider: wsProviderFrom
                         })];
                 case 1:
-                    fromApi = _a.sent();
+                    fromApi = _b.sent();
                     wsProviderTo = new api_1.WsProvider("wss://fullnode-collator.charcoal.centrifuge.io");
                     return [4 /*yield*/, api_1.ApiPromise.create({
                             provider: wsProviderTo
                         })];
                 case 2:
-                    toApi = _a.sent();
+                    toApi = _b.sent();
                     storageItems = [
-                        util_crypto_1.xxhashAsHex('Vesting', 128)
+                        //xxhashAsHex('Vesting', 128)
+                        util_crypto_1.xxhashAsHex('Proxy', 128)
                     ];
-                    storageItems.push.apply(storageItems, common_1.DefaultStorage);
                     return [4 /*yield*/, fromApi.rpc.state.getMetadata()];
                 case 3:
-                    metadataFrom = _a.sent();
+                    metadataFrom = _b.sent();
                     return [4 /*yield*/, fromApi.rpc.state.getMetadata()];
                 case 4:
-                    metadataTo = _a.sent();
+                    metadataTo = _b.sent();
                     _loop_2 = function (key) {
                         var availableFrom = false;
                         var availableTo = false;
@@ -524,11 +620,17 @@ function test_run() {
                     }
                     return [4 /*yield*/, fromApi.rpc.chain.getHeader()];
                 case 5:
-                    lastHdr = _a.sent();
+                    lastHdr = _b.sent();
                     at = lastHdr.hash;
-                    return [4 /*yield*/, transform(fromApi, toApi, storageItems, at)];
+                    to = toApi.createType("Hash", 0);
+                    keyItems = [];
+                    for (_a = 0, storageItems_3 = storageItems; _a < storageItems_3.length; _a++) {
+                        stringKey = storageItems_3[_a];
+                        keyItems.push(toApi.createType("StorageKey", stringKey));
+                    }
+                    return [4 /*yield*/, transform(fromApi, toApi, keyItems, at, to)];
                 case 6:
-                    migrationData = _a.sent();
+                    migrationData = _b.sent();
                     fromApi.disconnect();
                     toApi.disconnect();
                     return [2 /*return*/];

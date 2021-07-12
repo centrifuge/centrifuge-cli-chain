@@ -1,12 +1,14 @@
 // Here comes the oclif specific stuff
 import Command, {flags} from '@oclif/command'
-import {ApiPromise, SubmittableResult, WsProvider} from "@polkadot/api";
+import {ApiPromise, Keyring, SubmittableResult, WsProvider} from "@polkadot/api";
 import { xxhashAsHex} from "@polkadot/util-crypto";
-import {Hash, VestingInfo} from "@polkadot/types/interfaces";
+import {AccountId, Balance, Hash, VestingInfo} from "@polkadot/types/interfaces";
 
-import {DefaultStorage, insertOrNewMap, toByteArray, toHexString} from "../common/common";
+import {DefaultStorage, Dispatcher, insertOrNewMap, toByteArray, toHexString} from "../common/common";
 import {StorageItem, transform, StorageValueValue, StorageMapValue, StorageDoubleMapValue} from "../transform/transform";
 import {ApiTypes, SubmittableExtrinsic} from "@polkadot/api/types";
+import {KeyringPair} from "@polkadot/keyring/types";
+import {bool, StorageKey} from "@polkadot/types";
 
 export default class MigrateCommand extends Command {
     fromApi: ApiPromise;
@@ -103,8 +105,8 @@ export default class MigrateCommand extends Command {
             at = this.fromApi.createType("Hash", flags["at-block"]);
         }
 
-        let migrationData = await prepareMigrate(this.fromApi, this.toApi, storageItems, at)
-            .catch((err) => console.log(err)); // TODO: Do something usefull with error and abort.
+        //let migrationData = await prepareMigrate(this.fromApi, this.toApi, storageItems, at, at) // TODO: Add actual to from parachain
+         //   .catch((err) => console.log(err)); // TODO: Do something usefull with error and abort.
 
 
 
@@ -115,8 +117,8 @@ export default class MigrateCommand extends Command {
     }
 }
 
-export async function prepareMigrate(fromApi: ApiPromise, toApi: ApiPromise, storageItems: Array<string>, at: Hash): Promise<Map<string, Map<string, Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>>>> {
-    let transformedData = Array.from(await transform(fromApi, toApi, storageItems, at));
+export async function prepareMigrate(fromApi: ApiPromise, toApi: ApiPromise, storageItems: Array<StorageKey>, at: Hash, to: Hash): Promise<Map<string, Map<string, Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>>>> {
+    let transformedData = Array.from(await transform(fromApi, toApi, storageItems, at, to));
 
     let migrationXts: Map<string, Map<string, Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>>> = new Map();
 
@@ -135,12 +137,55 @@ export async function prepareMigrate(fromApi: ApiPromise, toApi: ApiPromise, sto
             let migratedPalletStorageItems = await prepareVesting(toApi, keyValues);
             migrationXts.set(prefix, migratedPalletStorageItems)
 
+        } else if (prefix.startsWith(xxhashAsHex("Proxy", 128))) {
+            let migratedPalletStorageItems = await prepareProxy(toApi, keyValues);
+            migrationXts.set(prefix, migratedPalletStorageItems)
+
         } else {
             console.log("Fetched data that can not be migrated. PatriciaKey is: " + prefix);
         }
     }
 
     return migrationXts;
+}
+
+export async function migrate(
+    toApi: ApiPromise,
+    executor: KeyringPair,
+    sequence: Array<SequenceElement>,
+    data: Map<string, Map<string, Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>>>,
+    cbErr: (failed: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>) => void
+) : Promise<Array<[Hash, bigint]>>
+{
+    const { nonce } = await toApi.query.system.account(executor.address);
+
+    let dispatcher = new Dispatcher(toApi, executor, nonce.toBigInt(), cbErr, 10, 100);
+
+    for (const one of sequence) {
+        if (one instanceof OneLevelSequenceElement) {
+            let palletData = data.get(one.pallet)
+            if (palletData !== undefined) {
+                for(const [key, data] of Array.from(palletData)) {
+                    await dispatcher.sudoDispatch(data);
+                }
+            } else {
+                throw Error("Sequence element was NOT part of transformation.");
+            }
+        } else if (one instanceof TwoLevelSequenceElement) {
+            let storageItemDataMap = data.get(one.pallet)
+            let storageItemData = storageItemDataMap.get(one.getStorageKey());
+            if (storageItemData !== undefined) {
+                await dispatcher.sudoDispatch(storageItemData)
+            } else {
+                //throw Error("Sequence element was NOT part of transformation.");
+            }
+        } else {
+            throw Error("Unimplemented Sequence. No migration happening.")
+        }
+    }
+
+    console.log("Awaiting results now...")
+    return await dispatcher.getResults();
 }
 
 
@@ -150,7 +195,7 @@ async function prepareSystem(toApi: ApiPromise, keyValues: Map<string, Array<Sto
     // Match against the actual storage items of a pallet.
     for(let [palletStorageItemKey, values] of Array.from(keyValues)) {
         if (palletStorageItemKey === (xxhashAsHex("System", 128) + xxhashAsHex("Account", 128).slice(2))) {
-            xts.set(palletStorageItemKey, await transformSystemAccount(toApi, values));
+            xts.set(palletStorageItemKey, await prepareSystemAccount(toApi, values));
 
         } else {
             console.log("Fetched data that can not be migrated. PatriciaKey is: " + palletStorageItemKey);
@@ -160,15 +205,70 @@ async function prepareSystem(toApi: ApiPromise, keyValues: Map<string, Array<Sto
     return xts;
 }
 
+async function prepareProxy(toApi: ApiPromise, keyValues: Map<string, Array<StorageItem>>):  Promise<Map<string, Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>>> {
+    let xts: Map<string, Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>> = new Map();
 
+    // Match against the actual storage items of a pallet.
+    for(let [palletStorageItemKey, values] of Array.from(keyValues)) {
+        if (palletStorageItemKey === (xxhashAsHex("Proxy", 128) + xxhashAsHex("Proxies", 128).slice(2))) {
+            xts.set(palletStorageItemKey, await prepareProxyProxies(toApi, values));
 
-async function transformSystemAccount(toApi: ApiPromise, values: StorageItem[]): Promise<Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>> {
+        } else {
+            console.log("Fetched data that can not be migrated. PatriciaKey is: " + palletStorageItemKey);
+        }
+    }
+
+    return xts;
+}
+
+async function prepareProxyProxies(toApi: ApiPromise, values: StorageItem[]): Promise<Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>> {
+    let xts: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>> = new Array();
+
+    let packetOfProxies: Array<[AccountId, Balance, number[] | Uint8Array]> = new Array();
+
+    // @ts-ignore
+    const maxProxies = toApi.consts.migration.migrationMaxProxies.toNumber();
+
+    let counter = 0;
+    for (const item of values) {
+        // We know from the transformation that optional is set here.
+        // In this case it defines the actual amount that shall be reserved on the delegator
+        counter += 1;
+        if (item instanceof StorageMapValue) {
+            if (packetOfProxies.length === maxProxies - 1  || counter === values.length) {
+                // push the last element and prepare extrinsic
+                let accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32))
+                // @ts-ignore
+                let proxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', item.value);
+                console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
+                packetOfProxies.push([accountId, item.optional, item.value])
+
+                xts.push(toApi.tx.migration.migrateProxyProxies(packetOfProxies))
+                packetOfProxies = new Array();
+
+            } else {
+                let accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32))
+                // @ts-ignore
+                let proxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', item.value);
+                console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
+
+                packetOfProxies.push([accountId, item.optional, item.value])
+            }
+        } else {
+            throw Error("Expected Proxy.Proxies storage values to be of type StorageMapValue. Got: " + JSON.stringify(item));
+        }
+    }
+
+    return xts;
+}
+
+async function prepareSystemAccount(toApi: ApiPromise, values: StorageItem[]): Promise<Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>> {
     let xts: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>> = new Array();
 
     let packetOfAccounts: Array<[number[] | Uint8Array, number[] | Uint8Array]> = new Array();
 
     // @ts-ignore
-    const maxAccounts = toApi.consts.migration.maxAccounts.toNumber();
+    const maxAccounts = toApi.consts.migration.migrationMaxAccounts.toNumber();
 
     let counter = 0;
     for (const item of values) {
@@ -193,7 +293,7 @@ async function transformSystemAccount(toApi: ApiPromise, values: StorageItem[]):
 
 
 async function retrieveIdAndAccount(item: StorageMapValue): Promise<[number[] | Uint8Array, number[] | Uint8Array]> {
-    const id = Array.from(item.patriciaKey);
+    const id = Array.from(item.patriciaKey.toU8a(true));
     const value = Array.from(item.value);
 
     return [id, value];
@@ -204,7 +304,7 @@ async function prepareBalances(toApi: ApiPromise, keyValues: Map<string, Array<S
 
     for(let [palletStorageItemKey, values] of Array.from(keyValues)) {
         if (palletStorageItemKey === xxhashAsHex("Balances", 128) + xxhashAsHex("TotalIssuance", 128).slice(2)) {
-            xts.set(palletStorageItemKey, await transformBalancesTotalIssuance(toApi, values));
+            xts.set(palletStorageItemKey, await prepareBalancesTotalIssuance(toApi, values));
         } else {
             console.log("Fetched data that can not be migrated. PatriciaKey is: " + palletStorageItemKey);
         }
@@ -213,7 +313,7 @@ async function prepareBalances(toApi: ApiPromise, keyValues: Map<string, Array<S
     return xts;
 }
 
-async function transformBalancesTotalIssuance(toApi: ApiPromise, values: StorageItem[]): Promise<Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>> {
+async function prepareBalancesTotalIssuance(toApi: ApiPromise, values: StorageItem[]): Promise<Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>> {
     let xts: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>> = new Array();
 
     if (values.length != 1) {
@@ -237,7 +337,7 @@ async function prepareVesting(toApi: ApiPromise, keyValues: Map<string, Array<St
 
     for(let [palletStorageItemKey, values] of Array.from(keyValues)) {
         if (palletStorageItemKey === xxhashAsHex("Vesting", 128) + xxhashAsHex("Vesting", 128).slice(2)) {
-            xts.set(palletStorageItemKey, await transformVestingVestingInfo(toApi, values));
+            xts.set(palletStorageItemKey, await prepareVestingVestingInfo(toApi, values));
 
         } else {
             console.log("Fetched data that can not be migrated. PatriciaKey is: " + palletStorageItemKey);
@@ -247,28 +347,29 @@ async function prepareVesting(toApi: ApiPromise, keyValues: Map<string, Array<St
     return xts;
 }
 
-async function transformVestingVestingInfo(toApi: ApiPromise, values: StorageItem[]): Promise<Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>> {
+async function prepareVestingVestingInfo(toApi: ApiPromise, values: StorageItem[]): Promise<Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>> {
     let xts: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>> = new Array();
 
-    let packetOfVestings: Array<VestingInfo> = new Array();
+    let packetOfVestings: Array<[AccountId, VestingInfo]> = new Array();
 
     // @ts-ignore
-    const maxVestings = toApi.consts.migration.maxVestings.toNumber();
+    const maxVestings = toApi.consts.migration.migrationMaxVestings.toNumber();
     let counter = 0;
 
     for (const item of values) {
         counter += 1;
         if (item instanceof StorageMapValue) {
             let vestingInfo = toApi.createType("VestingInfo", item.value);
+            let accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32))
 
             if (packetOfVestings.length === maxVestings - 1  || counter === values.length){
                 // push the last element and prepare extrinsic
-                packetOfVestings.push(vestingInfo)
+                packetOfVestings.push([accountId, vestingInfo])
                 xts.push(toApi.tx.migration.migrateVestingVesting(packetOfVestings))
 
                 packetOfVestings = new Array();
             } else {
-                packetOfVestings.push(vestingInfo)
+                packetOfVestings.push([accountId, vestingInfo])
             }
         } else {
             throw Error("Expected Vesting.Vesting storage value to be of type StorageMapValue. Got: " + JSON.stringify(item));
@@ -281,19 +382,31 @@ async function transformVestingVestingInfo(toApi: ApiPromise, values: StorageIte
 
 
 export async function test_run() {
-    const wsProviderFrom = new WsProvider("wss://fullnode.amber.centrifuge.io");
+    const wsProviderFrom = new WsProvider("wss://fullnode-archive.centrifuge.io");
     const fromApi = await ApiPromise.create({
-        provider: wsProviderFrom
+        provider: wsProviderFrom,
+        types: {
+            ProxyType: {
+                _enum: ['Any', 'NonTransfer', 'Governance', 'Staking', 'Vesting']
+            }
+        }
     });
 
-    const wsProviderTo = new WsProvider("wss://fullnode-collator.charcoal.centrifuge.io");
+    const wsProviderTo = new WsProvider("ws://127.0.0.1:9946");
+    //const wsProviderTo = new WsProvider("wss://fullnode-collator.charcoal.centrifuge.io");
     const toApi = await ApiPromise.create({
-        provider: wsProviderTo
+        provider: wsProviderTo,
+        types: {
+            ProxyType: {
+                _enum: ['Any', 'NonTransfer', 'Governance', '_Staking', 'NonProxy']
+            }
+        }
     });
 
 
     let storageItems: Array<string> = [
-        xxhashAsHex('Vesting', 128)
+        xxhashAsHex('Vesting', 128) + xxhashAsHex("Vesting", 128).slice(2),
+        xxhashAsHex('Proxy', 128) + xxhashAsHex("Proxies", 128).slice(2)
     ];
 
     storageItems.push(...DefaultStorage);
@@ -333,8 +446,77 @@ export async function test_run() {
     const lastHdr = await fromApi.rpc.chain.getHeader();
     let at = lastHdr.hash;
 
-    let migrationData = await prepareMigrate(fromApi, toApi, storageItems, at);
+    let keyItems = [];
+
+    for (const stringKey of storageItems) {
+        keyItems.push(fromApi.createType("StorageKey", stringKey));
+    }
+
+    let migrationData = await prepareMigrate(fromApi, toApi, keyItems, at, at); // TODO: Add actual to hash from parachain
+
+    let sequence: Array<SequenceElement> = new Array();
+    sequence.push(new TwoLevelSequenceElement(xxhashAsHex("Balances", 128),  xxhashAsHex("TotalIssuance", 128)));
+    sequence.push(new TwoLevelSequenceElement( xxhashAsHex("System", 128),  xxhashAsHex("Account", 128)));
+    sequence.push(new TwoLevelSequenceElement( xxhashAsHex("Vesting", 128),  xxhashAsHex("Vesting", 128)));
+    sequence.push(new TwoLevelSequenceElement( xxhashAsHex("Proxy", 128),  xxhashAsHex("Proxies", 128)));
+
+    const keyring = new Keyring({ type: 'sr25519'});
+    let alice = keyring.addFromUri('//Alice');
+    let failed: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>> = new Array();
+
+    let results = await migrate(toApi, alice, sequence, migrationData, (failedXts) => {
+        failed.push(...failedXts);
+        console.log("The following extrinsics failed");
+
+        for (const xt of failedXts) {
+            console.log(xt.toJSON())
+        }
+    });
+
+    console.log(results);
 
     fromApi.disconnect();
     toApi.disconnect();
+}
+
+// Abstract migration element and then whole pallet or just item.
+
+abstract class SequenceElement {
+    readonly inSequence: boolean;
+    readonly isPallet: boolean
+    abstract getStorageKey(): string;
+
+    constructor(inSequence: boolean, isPallet: boolean) {
+        this.inSequence = inSequence;
+        this.isPallet = isPallet;
+    }
+}
+
+class OneLevelSequenceElement extends SequenceElement {
+    readonly pallet: string;
+
+    constructor(pallet: string, inSequence: boolean = false) {
+        super(inSequence, true);
+
+        this.pallet = pallet;
+    }
+
+    getStorageKey(): string {
+        return (this.pallet);
+    }
+}
+
+class TwoLevelSequenceElement extends SequenceElement{
+    readonly pallet: string;
+    readonly storageItem: string;
+
+    constructor(pallet: string, storageItem: string, inSequence: boolean = false) {
+        super(inSequence, false);
+        this.pallet = pallet;
+        this.storageItem = storageItem;
+    }
+
+    getStorageKey(): string {
+        return ( this.pallet + this.storageItem.slice(2));
+    }
 }

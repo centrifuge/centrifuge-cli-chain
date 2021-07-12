@@ -44,8 +44,13 @@ function main() {
     return __awaiter(this, void 0, void 0, function () {
         return __generator(this, function (_a) {
             switch (_a.label) {
-                case 0: return [4 /*yield*/, migrate_js_1.test_run()];
+                case 0: 
+                //await test_run_fork();
+                //await test_run_transform();
+                return [4 /*yield*/, migrate_js_1.test_run()];
                 case 1:
+                    //await test_run_fork();
+                    //await test_run_transform();
                     _a.sent();
                     return [2 /*return*/];
             }

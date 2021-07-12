@@ -2,11 +2,12 @@
 import Command, {flags} from '@oclif/command'
 import {ApiPromise, WsProvider} from "@polkadot/api";
 import { xxhashAsHex } from "@polkadot/util-crypto";
-import { Hash } from "@polkadot/types/interfaces";
+import {Balance, Hash, ProxyDefinition} from "@polkadot/types/interfaces";
 
 import { fork } from "../fork/fork";
 import {toHexString, DefaultStorage, insertOrNewMap} from "../common/common";
 import {prepareMigrate} from "../migrate/migrate";
+import {StorageKey} from "@polkadot/types";
 
 export default class TransformCommand extends Command {
     fromApi: ApiPromise;
@@ -109,7 +110,7 @@ export default class TransformCommand extends Command {
         }
 
         try {
-            let state = await transform(this.fromApi, this.toApi, storageItems, at);
+            //let state = await transform(this.fromApi, this.toApi, storageItems, at, at); // TODO: add actual to hash from parachain
         } catch (err) {
             // TODO: Do something with the error
         }
@@ -128,55 +129,148 @@ export default class TransformCommand extends Command {
     }
 }
 
-export async function transform(fromApi: ApiPromise, toApi: ApiPromise,  storageItems: Array<string>, at: Hash): Promise<Map<string, Map<string, Array<StorageItem>>>>   {
-    let forkData = Array.from(await fork(fromApi, storageItems, at));
+export async function transform(fromApi: ApiPromise, toApi: ApiPromise,  storageItems: Array<StorageKey>, atFrom: Hash, atTo: Hash): Promise<Map<string, Map<string, Array<StorageItem>>>>   {
+    let forkData = Array.from(await fork(fromApi, storageItems, atFrom));
 
     let state: Map<string, Map<string, Array<StorageItem>>> = new Map();
 
     // For every prefix do the correct transformation.
-    for (let [prefix, keyValues] of forkData) {
+    for (let [key, keyValues] of forkData) {
         // Match all prefixes we want to transform
-        if (prefix.startsWith(xxhashAsHex("System",128))) {
+        if (key.startsWith(xxhashAsHex("System",128))) {
+             let palletKey = xxhashAsHex("System", 128);
              let migratedPalletStorageItems = await transformSystem(fromApi, toApi, keyValues);
-             state.set(prefix, migratedPalletStorageItems)
+             state.set(palletKey, migratedPalletStorageItems)
 
-        } else if (prefix.startsWith(xxhashAsHex("Balances", 128))) {
+        } else if (key.startsWith(xxhashAsHex("Balances", 128))) {
+            let palletKey = xxhashAsHex("Balances", 128);
             let migratedPalletStorageItems = await transformBalances(fromApi, toApi, keyValues);
-            state.set(prefix, migratedPalletStorageItems)
+            state.set(palletKey, migratedPalletStorageItems)
 
-        } else if (prefix.startsWith(xxhashAsHex("Vesting", 128))) {
-            let migratedPalletStorageItems = await transformVesting(fromApi, toApi, keyValues, at);
-            state.set(prefix, migratedPalletStorageItems)
+        } else if (key.startsWith(xxhashAsHex("Vesting", 128))) {
+            let palletKey = xxhashAsHex("Vesting", 128);
+            let migratedPalletStorageItems = await transformVesting(fromApi, toApi, keyValues, atFrom, atTo);
+            state.set(palletKey, migratedPalletStorageItems)
 
-        } else {
-            console.log("Fetched data that can not be transformed. PatriciaKey is: " + prefix);
+        } else if (key.startsWith(xxhashAsHex("Proxy", 128))) {
+            let palletKey = xxhashAsHex("Proxy", 128);
+            let migratedPalletStorageItems = await transformProxy(fromApi, toApi, keyValues);
+            state.set(palletKey, migratedPalletStorageItems)
+
+        }  else {
+            console.log("Fetched data that can not be transformed. PatriciaKey is: " + key);
         }
     }
 
     return state;
 }
 
-async function transformSystem(fromApi: ApiPromise, toApi: ApiPromise, keyValues: Array<[Uint8Array | number[], Uint8Array | number[]]>):  Promise<Map<string, Array<StorageItem>>> {
+async function transformProxy(fromApi: ApiPromise, toApi: ApiPromise, keyValues: Array<[StorageKey, Uint8Array | number[]]>):  Promise<Map<string, Array<StorageItem>>> {
     let state: Map<string, Array<StorageItem>> = new Map();
 
     // Match against the actual storage items of a pallet.
     for(let [patriciaKey, value] of keyValues) {
-        let hex: string = '0x' + await toHexString(patriciaKey);
-        let systemAccount = xxhashAsHex("System", 128) + xxhashAsHex("Account", 128).slice(2);
-        if (hex.startsWith(systemAccount)) {
-            let pkStorageItem = xxhashAsHex("System", 128) + xxhashAsHex("Account", 128).slice(2);
-            await insertOrNewMap(state, pkStorageItem, await transformSystemAccount(fromApi, toApi, patriciaKey, value));
+        if (patriciaKey.toHex().startsWith(xxhashAsHex("Proxy", 128) + xxhashAsHex("Proxies", 128).slice(2))) {
+            let pkStorageItem = xxhashAsHex("Proxy", 128) + xxhashAsHex("Proxies", 128).slice(2);
+            await insertOrNewMap(state, pkStorageItem, await transformProxyProxies(fromApi, toApi, patriciaKey, value));
         } else {
-            console.log("Fetched data that can not be transformed. PatriciaKey is: " + hex);
+            console.log("Fetched data that can not be transformed. PatriciaKey is: " + patriciaKey.toHuman());
         }
     }
 
     return state;
 }
 
+async function transformProxyProxies(fromApi: ApiPromise, toApi: ApiPromise, completeKey: StorageKey, scaleOldProxies: number[] | Uint8Array): Promise<StorageItem> {
+    // @ts-ignore, see https://github.com/polkadot-js/api/issues/3746
+    let oldProxyInfo = fromApi.createType('(Vec<(AccountId, ProxyType)>, Balance)', scaleOldProxies);
+
+    let proxies: Array<ProxyDefinition> = new Array();
+
+    // For the checks if anonymous proxies, we check if CINC is part of the proxies. Which indicates, that
+    // that it is indeed an anonymous proxy. As CINC itself is a multisig...
+    const CINC =  fromApi.createType("AccountId", "4djGpfJtHkS3kXBNtSFijf8xHbBY8mYvnUR7zrLM9bCyF7Js");
+    let CINCisDelegate = false;
+
+    // 1. Iterate over all elements of the vector
+    // 2. Create a `ProxyDefinition` for each element
+    for (const oldElement of oldProxyInfo[0]) {
+        let delegate = toApi.createType("AccountId", oldElement[0]);
+        if (CINC.toHex() === delegate.toHex()) {
+            CINCisDelegate = true;
+        }
+
+        let proxyType = toApi.createType("ProxyType", oldElement[1]);
+        let delay = toApi.createType("BlockNumber", 0);
+
+        let proxyDef = toApi.createType("ProxyDefinition",
+            [
+                delegate,
+                proxyType,
+                delay
+            ]);
+
+        proxies.push(proxyDef);
+    }
+    let deposit = toApi.createType("Balance", oldProxyInfo[1]);
+    // @ts-ignore, see https://github.com/polkadot-js/api/issues/3746
+    let newProxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)',
+    [
+                proxies,
+                deposit
+        ]
+    );
+
+    // We must somehow detect the anonymous proxies. This can only be done on a best effort basis.
+    // The reason for this is, that when an anonymous proxy did some actions, that included the reserve of
+    // his balances, the logic below will not detect it, if the reserve goes above the threshold. There is no other
+    // way to detect an anonymous proxy otherwise...
+    const proxiedAccount = fromApi.createType("AccountId", completeKey.slice(-32));
+    const { nonce, data: balance } = await fromApi.query.system.account(proxiedAccount);
+    const base = await fromApi.consts.proxy.proxyDepositBase;
+    const perProxy = await fromApi.consts.proxy.proxyDepositFactor;
+
+    let reserve: Balance;
+    // In the case that we see that the amount reserved is smaller than 350 mCFG, we can be sure, that this
+    // is an anonymous proxy. The reverse does not prove the non-existence of an anonymous proxy!
+    // Hence, we must ensure, that we subtract 350 mCFg from the deposit, as this one is reserved on the creator!
+    if (balance.reserved.toBigInt() < (BigInt(proxies.length) * perProxy.toBigInt()) + base.toBigInt()) {
+        let amount = deposit.toBigInt() - (perProxy.toBigInt() + base.toBigInt());
+        reserve = toApi.createType("Balance", amount);
+        console.log("Anonymous detected. Reserving: " + reserve.toHuman() + " CINC is: " + CINCisDelegate);
+    } else if (CINCisDelegate) {
+        let amount = deposit.toBigInt() - (perProxy.toBigInt() + base.toBigInt());
+        reserve = toApi.createType("Balance", amount);
+        console.log("Anonymous detected. Reserving: " + reserve.toHuman() + " CINC is: " + CINCisDelegate);
+    } else {
+        reserve = toApi.createType("Balance", deposit);
+        console.log("Non-Anonymous detected. Reserving: " + reserve.toHuman() + " CINC is: " + CINCisDelegate);
+        console.log("Balance of this proxy is: " + balance.free.toHuman() + " " + balance.reserved.toHuman());
+    }
+
+    console.log("----------------------------")
+    return new StorageMapValue(newProxyInfo.toU8a(), completeKey, reserve);
+}
 
 
-async function transformSystemAccount(fromApi: ApiPromise, toApi: ApiPromise, completeKey: number[] | Uint8Array, scaleOldAccountInfo: number[] | Uint8Array): Promise<StorageItem> {
+async function transformSystem(fromApi: ApiPromise, toApi: ApiPromise, keyValues: Array<[StorageKey, Uint8Array | number[]]>):  Promise<Map<string, Array<StorageItem>>> {
+    let state: Map<string, Array<StorageItem>> = new Map();
+
+    // Match against the actual storage items of a pallet.
+    for(let [patriciaKey, value] of keyValues) {
+        let systemAccount = xxhashAsHex("System", 128) + xxhashAsHex("Account", 128).slice(2);
+        if (patriciaKey.toHex().startsWith(systemAccount)) {
+            let pkStorageItem = xxhashAsHex("System", 128) + xxhashAsHex("Account", 128).slice(2);
+            await insertOrNewMap(state, pkStorageItem, await transformSystemAccount(fromApi, toApi, patriciaKey, value));
+        } else {
+            console.log("Fetched data that can not be transformed. PatriciaKey is: " + patriciaKey.toHuman());
+        }
+    }
+
+    return state;
+}
+
+async function transformSystemAccount(fromApi: ApiPromise, toApi: ApiPromise, completeKey: StorageKey, scaleOldAccountInfo: number[] | Uint8Array): Promise<StorageItem> {
     let oldAccountInfo = fromApi.createType("AccountInfo", scaleOldAccountInfo);
     let newAccountInfo = await toApi.createType("AccountInfo", [
         0, // nonce
@@ -199,23 +293,22 @@ async function transformSystemAccount(fromApi: ApiPromise, toApi: ApiPromise, co
     return new StorageMapValue(newAccountInfo.toU8a(true), completeKey);
 }
 
-async function transformBalances(fromApi: ApiPromise, toApi: ApiPromise, keyValues: Array<[number[] | Uint8Array, number[] | Uint8Array]>):  Promise<Map<string, Array<StorageItem>>>{
+async function transformBalances(fromApi: ApiPromise, toApi: ApiPromise, keyValues: Array<[StorageKey, number[] | Uint8Array]>):  Promise<Map<string, Array<StorageItem>>>{
     let state: Map<string, Array<StorageItem>> = new Map();
 
     for(let [patriciaKey, value] of keyValues) {
-        let hex: string = '0x' + await toHexString(patriciaKey);
-        if (hex.startsWith(xxhashAsHex("Balances", 128) + xxhashAsHex("TotalIssuance", 128).slice(2))) {
+        if (patriciaKey.toHex().startsWith(xxhashAsHex("Balances", 128) + xxhashAsHex("TotalIssuance", 128).slice(2))) {
             let pkStorageItem = xxhashAsHex("Balances", 128) + xxhashAsHex("TotalIssuance", 128).slice(2);
             await insertOrNewMap(state, pkStorageItem, await transformBalancesTotalIssuance(fromApi, toApi, patriciaKey, value));
         } else {
-            console.log("Fetched data that can not be transformed. PatriciaKey is: " + hex);
+            console.log("Fetched data that can not be transformed. Part of Balances. PatriciaKey is: " + patriciaKey.toHex());
         }
     }
 
     return state;
 }
 
-async function transformBalancesTotalIssuance(fromApi: ApiPromise, toApi: ApiPromise, completeKey: number[] | Uint8Array, scaleOldTotalIssuance: number[] | Uint8Array): Promise<StorageItem> {
+async function transformBalancesTotalIssuance(fromApi: ApiPromise, toApi: ApiPromise, completeKey: StorageKey, scaleOldTotalIssuance: number[] | Uint8Array): Promise<StorageItem> {
     let oldIssuance = fromApi.createType("Balance", scaleOldTotalIssuance);
     let newIssuance = toApi.createType("Balance", oldIssuance.toU8a(true));
 
@@ -226,26 +319,28 @@ async function transformBalancesTotalIssuance(fromApi: ApiPromise, toApi: ApiPro
     return new StorageValueValue(newIssuance.toU8a(true));
 }
 
-async function transformVesting(fromApi: ApiPromise, toApi: ApiPromise, keyValues: Array<[number[] | Uint8Array, number[] | Uint8Array]>, at: Hash):  Promise<Map<string, Array<StorageItem>>> {
+async function transformVesting(fromApi: ApiPromise, toApi: ApiPromise, keyValues: Array<[StorageKey, number[] | Uint8Array]>, atFrom: Hash, atTo: Hash):  Promise<Map<string, Array<StorageItem>>> {
     let state: Map<string, Array<StorageItem>> = new Map();
-    const atAsNumber = (await fromApi.rpc.chain.getBlock(at)).block.header.number.toBigInt();
+    const atFromAsNumber = (await fromApi.rpc.chain.getBlock(atFrom)).block.header.number.toBigInt();
+
+    // TODO: Actually use it here after tests
+    const atToAsNumber = BigInt(0);//(await toApi.rpc.chain.getBlock(atTo)).block.header.number.toBigInt();
 
 
     for(let [patriciaKey, value] of keyValues) {
-        let hex: string = '0x' + await toHexString(patriciaKey);
-        if (hex.startsWith(xxhashAsHex("Vesting", 128) + xxhashAsHex("Vesting", 128).slice(2))) {
+        if (patriciaKey.toHex().startsWith(xxhashAsHex("Vesting", 128) + xxhashAsHex("Vesting", 128).slice(2))) {
             let pkStorageItem = xxhashAsHex("Vesting", 128) + xxhashAsHex("Vesting", 128).slice(2);
-            await insertOrNewMap(state, pkStorageItem, await transformVestingVestingInfo(fromApi, toApi, patriciaKey, value, atAsNumber));
+            await insertOrNewMap(state, pkStorageItem, await transformVestingVestingInfo(fromApi, toApi, patriciaKey, value, atFromAsNumber, atToAsNumber));
 
         } else {
-            console.log("Fetched data that can not be transformed. PatriciaKey is: " + hex);
+            console.log("Fetched data that can not be transformed. PatriciaKey is: " + patriciaKey.toHuman());
         }
     }
 
     return state;
 }
 
-async function transformVestingVestingInfo(fromApi: ApiPromise, toApi: ApiPromise, completeKey: number[] | Uint8Array, scaleOldVestingInfo: number[] | Uint8Array, at: bigint): Promise<StorageItem> {
+async function transformVestingVestingInfo(fromApi: ApiPromise, toApi: ApiPromise, completeKey: StorageKey, scaleOldVestingInfo: number[] | Uint8Array, atFrom: bigint, atTo: bigint): Promise<StorageItem> {
     let old = fromApi.createType("VestingInfo", scaleOldVestingInfo);
 
     let remainingLocked;
@@ -253,7 +348,7 @@ async function transformVestingVestingInfo(fromApi: ApiPromise, toApi: ApiPromis
     let newStartingBlock;
 
     const blockPeriodOldVesting = (old.locked.toBigInt() / old.perBlock.toBigInt());
-    const blocksPassedSinceVestingStart = (at - old.startingBlock.toBigInt());
+    const blocksPassedSinceVestingStart = (atFrom - old.startingBlock.toBigInt());
 
     // We need to check if vesting is ongoing, is finished or has not yet started, as conversion will be different.
     if (blocksPassedSinceVestingStart > 0 && (blockPeriodOldVesting - blocksPassedSinceVestingStart) > 0) {
@@ -269,20 +364,20 @@ async function transformVestingVestingInfo(fromApi: ApiPromise, toApi: ApiPromis
         // This defines the remaining locked amount. Same as if a person has called vest once at the snapshot block.
         remainingLocked = old.locked.toBigInt() - (blocksPassedSinceVestingStart * old.perBlock.toBigInt());
         newPerBlock = remainingLocked / remainingBlocks;
-        newStartingBlock = BigInt(0);
+        newStartingBlock = atTo;
 
     } else if ((blockPeriodOldVesting - blocksPassedSinceVestingStart) <= 0 ) {
         // If vesting is finished -> use same start block and give everything at first block
         remainingLocked = old.locked.toBigInt();
         newPerBlock = old.locked.toBigInt();
-        newStartingBlock = BigInt(0);
+        newStartingBlock = atTo;
 
-    } else if ((old.startingBlock.toBigInt() - at) >= 0){
-        // If vesting has not started yes -> use same start block and multiply per block by 2 to take into account
+    } else if ((old.startingBlock.toBigInt() - atFrom) >= 0){
+        // If vesting has not started yes -> use starting block as (old - blocks_passed_on_old_mainnet) / 2 and multiply per block by 2 to take into account
         // 12s block time.
         remainingLocked = old.locked.toBigInt();
         newPerBlock = old.perBlock.toBigInt() * BigInt(2);
-        newStartingBlock = old.startingBlock.toBigInt() - at;
+        newStartingBlock = ((old.startingBlock.toBigInt() - atFrom) / BigInt(2)) + atTo;
 
     } else {
         throw Error("Unreachable code... Came here with old vesting info of: " + old.toHuman());
@@ -308,21 +403,24 @@ export class StorageValueValue extends StorageItem {
 }
 
 export class StorageMapValue extends StorageItem {
-    patriciaKey: number[] | Uint8Array;
+    patriciaKey: StorageKey;
+    // Intentionally allow arbitrary data here. The user MUST now what will be used here
+    optional: any;
 
-    constructor(value: number[] | Uint8Array, key: number[] | Uint8Array) {
+    constructor(value: number[] | Uint8Array, key: StorageKey, optional?: any) {
         super(value);
 
+        this.optional = optional;
         this.patriciaKey = key;
     }
 
 }
 
 export class StorageDoubleMapValue extends StorageItem {
-    patriciaKey1: number[] | Uint8Array;
-    patriciaKey2: number[] | Uint8Array;
+    patriciaKey1: StorageKey;
+    patriciaKey2: StorageKey;
 
-    constructor(value: number[] | Uint8Array, key1: number[] | Uint8Array, key2: number[] | Uint8Array) {
+    constructor(value: number[] | Uint8Array, key1: StorageKey, key2: StorageKey) {
         super(value);
 
         this.patriciaKey1 = key1;
@@ -343,10 +441,11 @@ export async function test_run() {
 
 
     let storageItems: Array<string> = [
-        xxhashAsHex('Vesting', 128)
+        //xxhashAsHex('Vesting', 128)
+        xxhashAsHex('Proxy', 128)
     ];
 
-    storageItems.push(...DefaultStorage);
+    //storageItems.push(...DefaultStorage);
 
     const metadataFrom = await fromApi.rpc.state.getMetadata();
     const metadataTo = await fromApi.rpc.state.getMetadata();
@@ -382,8 +481,15 @@ export async function test_run() {
 
     const lastHdr = await fromApi.rpc.chain.getHeader();
     let at = lastHdr.hash;
+    let to = toApi.createType("Hash", 0); // TODO: This shall represent the first block. It is NOT used currently further down the road
 
-    let migrationData = await transform(fromApi, toApi, storageItems, at);
+    let keyItems = [];
+
+    for (const stringKey of storageItems) {
+        keyItems.push(toApi.createType("StorageKey", stringKey));
+    }
+
+    let migrationData = await transform(fromApi, toApi, keyItems, at, to);
 
     fromApi.disconnect();
     toApi.disconnect();

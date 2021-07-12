@@ -8,6 +8,8 @@ import { test_run as test_run_migrate } from './migrate/migrate.js';
 
 
 async function main() {
+    //await test_run_fork();
+    //await test_run_transform();
     await test_run_migrate();
 }
 

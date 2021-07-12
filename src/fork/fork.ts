@@ -95,7 +95,7 @@ export default class ForkCommand extends Command {
             at = api.createType("Hash", flags["at-block"]);
         }
 
-        let state = await fork(api, storageItems, at);
+        //let state = await fork(api, storageItems, at);
 
 
         if (flags["as-genesis"]) {
@@ -109,25 +109,24 @@ export default class ForkCommand extends Command {
             //       * define json format
         }
 
-        console.log(JSON.stringify(state));
+        //console.log(JSON.stringify(state));
 
     }
 }
 
-export async function fork(api: ApiPromise, storageItems: Array<string>, at: Hash): Promise<Map<string, Array<[ Uint8Array | number[], Uint8Array | number[]]>>>   {
-    let state: Map<string, Array<[ Uint8Array | number[], Uint8Array | number[]]>> = new Map();
+export async function fork(api: ApiPromise, storageItems: Array<StorageKey>, at: Hash): Promise<Map<string, Array<[ StorageKey, Uint8Array | number[]]>>>   {
+    let state: Map<string, Array<[ StorageKey, Uint8Array | number[]]>> = new Map();
 
-    for (const item of storageItems) {
-        let asKey: StorageKey = api.createType("StorageKey", item);
-        let data = await fetchState(api, at, asKey);
+    for (const key of storageItems) {
+        let data = await fetchState(api, at, key);
 
-        state.set(item, data);
+        state.set(key.toHex(), data);
     }
 
     return state;
 }
 
-async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<Array<[ Uint8Array | number[], Uint8Array | number[]]>> {
+async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<Array<[ StorageKey, Uint8Array | number[]]>> {
     console.log("Fetching storage for prefix: " + key.toHuman());
 
     let keyArray = await api.rpc.state.getKeysPaged(key, 1000);
@@ -135,7 +134,7 @@ async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<A
     let accumulate = keyArray.length;
 
     while (!fetched) {
-        let nextStartKey = keyArray[keyArray.length - 1];
+        let nextStartKey = api.createType("StorageKey", keyArray[keyArray.length - 1]);
         let intermArray = await api.rpc.state.getKeysPaged(key, 1000, nextStartKey, at);
 
         accumulate = accumulate + intermArray.length;
@@ -150,7 +149,7 @@ async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<A
 
     process.stdout.write("\n");
 
-    let pairs: Array<[Uint8Array | number[], Uint8Array | number[]]> = [];
+    let pairs: Array<[StorageKey, Uint8Array | number[]]> = [];
 
     accumulate = 0;
     for (const storageKey of keyArray) {
@@ -158,7 +157,7 @@ async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<A
         // TODO: Not sure, why the api does solely provide an unknown here and how we can tell the compiler
         //       that it will have an toU8a method.
         // @ts-ignore
-        pairs.push([storageKey.toU8a(true), storageValue.toU8a(true)]);
+        pairs.push([storageKey, storageValue.toU8a(true)]);
 
         accumulate = accumulate + 1;
         process.stdout.write("Fetched storage values: " + accumulate + "/" + keyArray.length + "\r");
@@ -206,8 +205,12 @@ export async function test_run() {
     const lastHdr = await api.rpc.chain.getHeader();
     let at = lastHdr.hash;
 
-    let state: Map<string, Array<[ Uint8Array | number[], Uint8Array | number[]]>> = await fork(api, storageItems, at);
+    let keyItems = [];
 
-    let data: Array<[ Uint8Array | number[], Uint8Array | number[]]> = state.get(DefaultStorage[0]);
+    for (const stringKey of storageItems) {
+        keyItems.push(api.createType("StorageKey", stringKey));
+    }
+
+    let state: Map<string, Array<[ StorageKey, Uint8Array | number[]]>> = await fork(api, keyItems, at);
 
 }

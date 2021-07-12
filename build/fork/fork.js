@@ -64,7 +64,7 @@ var ForkCommand = /** @class */ (function (_super) {
     }
     ForkCommand.prototype.run = function () {
         return __awaiter(this, void 0, void 0, function () {
-            var flags, wsProvider, api, storageItems, metadata, modules, _loop_1, _i, storageItems_1, key, at, lastHdr, state;
+            var flags, wsProvider, api, storageItems, metadata, modules, _loop_1, _i, storageItems_1, key, at, lastHdr;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
@@ -116,9 +116,8 @@ var ForkCommand = /** @class */ (function (_super) {
                     case 4:
                         at = api.createType("Hash", flags["at-block"]);
                         _a.label = 5;
-                    case 5: return [4 /*yield*/, fork(api, storageItems, at)];
-                    case 6:
-                        state = _a.sent();
+                    case 5:
+                        //let state = await fork(api, storageItems, at);
                         if (flags["as-genesis"]) {
                             // TODO: Here the stuff to
                             //       * create specs for forked chain
@@ -128,7 +127,6 @@ var ForkCommand = /** @class */ (function (_super) {
                             // TODO: Write stuff to a file here, correctly as a json
                             //       * define json format
                         }
-                        console.log(JSON.stringify(state));
                         return [2 /*return*/];
                 }
             });
@@ -169,7 +167,7 @@ var ForkCommand = /** @class */ (function (_super) {
 exports.default = ForkCommand;
 function fork(api, storageItems, at) {
     return __awaiter(this, void 0, void 0, function () {
-        var state, _i, storageItems_2, item, asKey, data;
+        var state, _i, storageItems_2, key, data;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -178,12 +176,11 @@ function fork(api, storageItems, at) {
                     _a.label = 1;
                 case 1:
                     if (!(_i < storageItems_2.length)) return [3 /*break*/, 4];
-                    item = storageItems_2[_i];
-                    asKey = api.createType("StorageKey", item);
-                    return [4 /*yield*/, fetchState(api, at, asKey)];
+                    key = storageItems_2[_i];
+                    return [4 /*yield*/, fetchState(api, at, key)];
                 case 2:
                     data = _a.sent();
-                    state.set(item, data);
+                    state.set(key.toHex(), data);
                     _a.label = 3;
                 case 3:
                     _i++;
@@ -209,7 +206,7 @@ function fetchState(api, at, key) {
                     _a.label = 2;
                 case 2:
                     if (!!fetched) return [3 /*break*/, 4];
-                    nextStartKey = keyArray[keyArray.length - 1];
+                    nextStartKey = api.createType("StorageKey", keyArray[keyArray.length - 1]);
                     return [4 /*yield*/, api.rpc.state.getKeysPaged(key, 1000, nextStartKey, at)];
                 case 3:
                     intermArray = _a.sent();
@@ -237,7 +234,7 @@ function fetchState(api, at, key) {
                     // TODO: Not sure, why the api does solely provide an unknown here and how we can tell the compiler
                     //       that it will have an toU8a method.
                     // @ts-ignore
-                    pairs.push([storageKey.toU8a(true), storageValue.toU8a(true)]);
+                    pairs.push([storageKey, storageValue.toU8a(true)]);
                     accumulate = accumulate + 1;
                     process.stdout.write("Fetched storage values: " + accumulate + "/" + keyArray.length + "\r");
                     _a.label = 7;
@@ -253,23 +250,23 @@ function fetchState(api, at, key) {
 }
 function test_run() {
     return __awaiter(this, void 0, void 0, function () {
-        var wsProvider, api, storageItems, metadata, _loop_2, _i, storageItems_3, key, lastHdr, at, state, data;
-        return __generator(this, function (_a) {
-            switch (_a.label) {
+        var wsProvider, api, storageItems, metadata, _loop_2, _i, storageItems_3, key, lastHdr, at, keyItems, _a, storageItems_4, stringKey, state;
+        return __generator(this, function (_b) {
+            switch (_b.label) {
                 case 0:
                     wsProvider = new api_1.WsProvider("wss://fullnode.centrifuge.io");
                     return [4 /*yield*/, api_1.ApiPromise.create({
                             provider: wsProvider
                         })];
                 case 1:
-                    api = _a.sent();
+                    api = _b.sent();
                     storageItems = [
                     //xxhashAsHex('Vesting', 128)
                     ];
                     storageItems.push.apply(storageItems, common_1.DefaultStorage);
                     return [4 /*yield*/, api.rpc.state.getMetadata()];
                 case 2:
-                    metadata = _a.sent();
+                    metadata = _b.sent();
                     _loop_2 = function (key) {
                         var available = false;
                         metadata.asLatest.modules.forEach(function (module) {
@@ -292,12 +289,16 @@ function test_run() {
                     }
                     return [4 /*yield*/, api.rpc.chain.getHeader()];
                 case 3:
-                    lastHdr = _a.sent();
+                    lastHdr = _b.sent();
                     at = lastHdr.hash;
-                    return [4 /*yield*/, fork(api, storageItems, at)];
+                    keyItems = [];
+                    for (_a = 0, storageItems_4 = storageItems; _a < storageItems_4.length; _a++) {
+                        stringKey = storageItems_4[_a];
+                        keyItems.push(api.createType("StorageKey", stringKey));
+                    }
+                    return [4 /*yield*/, fork(api, keyItems, at)];
                 case 4:
-                    state = _a.sent();
-                    data = state.get(common_1.DefaultStorage[0]);
+                    state = _b.sent();
                     return [2 /*return*/];
             }
         });
