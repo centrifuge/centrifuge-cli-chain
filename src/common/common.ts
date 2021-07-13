@@ -2,15 +2,76 @@ import {xxhashAsHex} from "@polkadot/util-crypto";
 import {StorageItem} from "../transform/transform";
 import {ApiTypes, SubmittableExtrinsic} from "@polkadot/api/types";
 import {ApiPromise, SubmittableResult} from "@polkadot/api";
-import {Hash, Index, Key} from "@polkadot/types/interfaces";
+import {Hash, ModuleMetadataLatest} from "@polkadot/types/interfaces";
 import {KeyringPair} from "@polkadot/keyring/types";
-import {StorageKey} from "@polkadot/types";
 
 
-export const DefaultStorage = [
-    xxhashAsHex("System", 128) + xxhashAsHex("Account", 128).slice(2),
-    xxhashAsHex("Balances", 128),
-];
+export function getDefaultStorage(): Array<StorageElement> {
+    return [
+        parseModuleInput("Balances.TotalIssuance"),
+        parseModuleInput("System.Account"),
+        parseModuleInput("Vesting.Vesting"),
+        parseModuleInput("Proxy.Proxies"),
+    ];
+}
+
+export async function checkAvailability(availableFromModules: Array<ModuleMetadataLatest>, availableToModules: Array<ModuleMetadataLatest>, wanted: StorageElement[] ): Promise<boolean> {
+    // Check if module is available
+    // Iteration is death, but we do not care here...
+    for (let storage of wanted) {
+        let availableFrom = false;
+        let availableTo = false;
+
+        availableFromModules.forEach((module) => {
+            if (module.storage.isSome) {
+                if (storage.key.startsWith(xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
+                    if (storage instanceof StorageItemElement) {
+                        for(let items of module.storage.unwrap().items) {
+                            availableFrom = storage.itemHash === xxhashAsHex(items.name.toString(), 128);
+                        }
+                    } else {
+                        availableFrom = true
+                    }
+                }
+            }
+        });
+
+        availableToModules.forEach((module) => {
+            if (module.storage.isSome) {
+                if (storage.key.startsWith(xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
+                    if (storage instanceof StorageItemElement) {
+                        for(let items of module.storage.unwrap().items) {
+                            availableTo = storage.itemHash === xxhashAsHex(items.name.toString(), 128);
+                        }
+                    } else {
+                        availableTo = true
+                    }
+                }
+            }
+        });
+
+        if (!availableFrom || !availableTo) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+export function parseModuleInput(input: string): StorageElement {
+    let parsed = input.split(".").filter((element, index) => {
+        return index < 2
+    });
+
+    let elem: StorageElement;
+
+    if (parsed.length === 1){
+        return new PalletElement(parsed[0]);
+    } else {
+        return new StorageItemElement(parsed[0], parsed[1]);
+    }
+}
 
 export async function insertOrNewMap(map: Map<string, Array<any>>, key: string, item: any) {
     if (map.has(key)) {
@@ -170,6 +231,10 @@ export class Dispatcher {
         let callNext = async () => {
             let extrinsic = xts.shift();
 
+            if (extrinsic === undefined) {
+                return;
+            }
+
             while (this.running >= this.maxConcurrent) {
                 await new Promise(r => setTimeout(r, 6000));
             }
@@ -258,6 +323,7 @@ export class Dispatcher {
             console.log("Sending with nonce " + this.nonce + ", running " + this.running +" : " + extrinsic.meta.name.toString());
 
             let activeNonce = await this.nextNonce();
+            // TODO: Add this for all items
             const unsub = await this.api.tx.sudo.sudo(extrinsic)
                 .signAndSend(this.signer, {nonce: activeNonce}, ({events = [], status}) => {
                     if (status.isInBlock || status.isFinalized) {
@@ -326,5 +392,42 @@ export class Dispatcher {
                 this.cbErr(xts);
                 console.log(err)
             });
+    }
+}
+
+
+export abstract class StorageElement {
+    readonly key: string
+
+    constructor(key: string) {
+        this.key = key;
+    }
+}
+
+export class PalletElement extends StorageElement{
+    readonly pallet: string
+    readonly palletHash: string
+
+    constructor(pallet: string) {
+        let key = xxhashAsHex(pallet, 128);
+        super(key);
+        this.pallet = pallet;
+        this.palletHash = xxhashAsHex(pallet, 128);
+    }
+}
+
+export class StorageItemElement extends StorageElement {
+    readonly pallet: string
+    readonly palletHash: string
+    readonly item: string
+    readonly itemHash: string
+
+    constructor(pallet: string, item: string) {
+        let key = xxhashAsHex(pallet, 128) + xxhashAsHex(item, 128).slice(2);
+        super(key);
+        this.pallet = pallet;
+        this.palletHash = xxhashAsHex(pallet, 128);
+        this.item = item;
+        this.itemHash = xxhashAsHex(item, 128);
     }
 }

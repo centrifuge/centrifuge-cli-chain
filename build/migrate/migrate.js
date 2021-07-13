@@ -56,8 +56,16 @@ exports.test_run = exports.migrate = exports.prepareMigrate = void 0;
 var command_1 = require("@oclif/command");
 var api_1 = require("@polkadot/api");
 var util_crypto_1 = require("@polkadot/util-crypto");
+var fs = require("fs");
+var readline = require("readline");
 var common_1 = require("../common/common");
 var transform_1 = require("../transform/transform");
+var AvailableMigrations = [
+    common_1.parseModuleInput("Balances.TotalIssuance"),
+    common_1.parseModuleInput("System.Account"),
+    common_1.parseModuleInput("Vesting.Vesting"),
+    common_1.parseModuleInput("Proxy.Proxies"),
+];
 var MigrateCommand = /** @class */ (function (_super) {
     __extends(MigrateCommand, _super);
     function MigrateCommand() {
@@ -65,105 +73,265 @@ var MigrateCommand = /** @class */ (function (_super) {
     }
     MigrateCommand.prototype.run = function () {
         return __awaiter(this, void 0, void 0, function () {
-            var flags, wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadata, modules, _loop_1, _i, storageItems_1, key, at, lastHdr;
+            var flags, executor, wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, _i, storageItems_1, item, metadataFrom, metadataTo, from, lastHdr, bn, to, lastHdr, bn, err_1, migrationData, sequence, failed_1, results, err_2;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
                         flags = this.parse(MigrateCommand).flags;
+                        if (flags["source-network"] === flags["destination-network"]) {
+                            // TODO: Log error and abort
+                        }
+                        return [4 /*yield*/, this.parseExecutor(flags["executor"])];
+                    case 1:
+                        executor = _a.sent();
                         wsProviderFrom = new api_1.WsProvider(flags["source-network"]);
                         return [4 /*yield*/, api_1.ApiPromise.create({
-                                provider: wsProviderFrom
+                                provider: wsProviderFrom,
+                                types: {
+                                    ProxyType: {
+                                        _enum: ['Any', 'NonTransfer', 'Governance', 'Staking', 'Vesting']
+                                    }
+                                }
                             })];
-                    case 1:
+                    case 2:
                         fromApi = _a.sent();
                         wsProviderTo = new api_1.WsProvider(flags["destination-network"]);
                         return [4 /*yield*/, api_1.ApiPromise.create({
-                                provider: wsProviderTo
+                                provider: wsProviderTo,
+                                types: {
+                                    ProxyType: {
+                                        _enum: ['Any', 'NonTransfer', 'Governance', '_Staking', 'NonProxy']
+                                    }
+                                }
                             })];
-                    case 2:
+                    case 3:
                         toApi = _a.sent();
                         this.fromApi = fromApi;
                         this.toApi = toApi;
-                        storageItems = flags["modules"];
-                        // Transfrom modules into correct hashes
-                        storageItems.forEach(function (item) {
+                        storageItems = flags["modules"].map(function (value, index) {
+                            return common_1.parseModuleInput(value);
                         });
                         if (!flags["no-default"]) {
-                            storageItems.push.apply(storageItems, common_1.DefaultStorage);
+                            storageItems.push.apply(storageItems, common_1.getDefaultStorage());
+                        }
+                        // Check if we can do this migration
+                        for (_i = 0, storageItems_1 = storageItems; _i < storageItems_1.length; _i++) {
+                            item = storageItems_1[_i];
+                            if (!AvailableMigrations.includes(item)) {
+                                // TODO: Log error and abort
+                            }
                         }
                         return [4 /*yield*/, this.fromApi.rpc.state.getMetadata()];
-                    case 3:
-                        metadata = _a.sent();
-                        modules = metadata.asLatest.modules;
-                        _loop_1 = function (key) {
-                            var available = false;
-                            metadata.asLatest.modules.forEach(function (module) {
-                                if (module.storage.isSome) {
-                                    if (key.startsWith(util_crypto_1.xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
-                                        available = true;
-                                    }
-                                }
-                            });
-                            if (!available) {
-                                console.log("Storage with key " + key + " is not available");
-                                storageItems.filter(function (val) { return key != val; });
-                            }
-                        };
-                        // Check if module is available
-                        // Iteration is death, but we do not care here...
-                        for (_i = 0, storageItems_1 = storageItems; _i < storageItems_1.length; _i++) {
-                            key = storageItems_1[_i];
-                            _loop_1(key);
-                        }
-                        if (!(flags["at-block"] == '-1')) return [3 /*break*/, 5];
-                        return [4 /*yield*/, this.fromApi.rpc.chain.getHeader()];
                     case 4:
-                        lastHdr = _a.sent();
-                        at = lastHdr.hash;
-                        return [3 /*break*/, 6];
+                        metadataFrom = _a.sent();
+                        return [4 /*yield*/, this.toApi.rpc.state.getMetadata()];
                     case 5:
-                        at = this.fromApi.createType("Hash", flags["at-block"]);
-                        _a.label = 6;
+                        metadataTo = _a.sent();
+                        return [4 /*yield*/, common_1.checkAvailability(metadataFrom.asLatest.modules, metadataTo.asLatest.modules, storageItems)];
                     case 6:
-                        //let migrationData = await prepareMigrate(this.fromApi, this.toApi, storageItems, at, at) // TODO: Add actual to from parachain
-                        //   .catch((err) => console.log(err)); // TODO: Do something usefull with error and abort.
-                        if (flags["output"]) {
-                            // TODO: Write stuff to a file here, correctly as a json
-                            //       * define json format
+                        if (!(_a.sent())) {
+                            // TODO: Log error and abort
                         }
-                        return [2 /*return*/];
+                        if (!(flags["from-block"] == '-1')) return [3 /*break*/, 8];
+                        return [4 /*yield*/, this.fromApi.rpc.chain.getHeader()];
+                    case 7:
+                        lastHdr = _a.sent();
+                        from = lastHdr.hash;
+                        return [3 /*break*/, 10];
+                    case 8:
+                        bn = parseInt(flags['from-block']);
+                        if (!(bn !== undefined)) return [3 /*break*/, 10];
+                        return [4 /*yield*/, this.fromApi.rpc.chain.getBlockHash(bn)];
+                    case 9:
+                        from = _a.sent();
+                        return [3 /*break*/, 10];
+                    case 10:
+                        if (!(flags["to-block"] == '-1')) return [3 /*break*/, 12];
+                        return [4 /*yield*/, this.toApi.rpc.chain.getHeader()];
+                    case 11:
+                        lastHdr = _a.sent();
+                        to = lastHdr.hash;
+                        return [3 /*break*/, 17];
+                    case 12:
+                        bn = parseInt(flags['to-block']);
+                        if (!(bn !== undefined)) return [3 /*break*/, 17];
+                        _a.label = 13;
+                    case 13:
+                        _a.trys.push([13, 15, , 16]);
+                        return [4 /*yield*/, this.toApi.rpc.chain.getBlockHash(bn)];
+                    case 14:
+                        to = _a.sent();
+                        return [3 /*break*/, 16];
+                    case 15:
+                        err_1 = _a.sent();
+                        return [3 /*break*/, 16];
+                    case 16: return [3 /*break*/, 17];
+                    case 17:
+                        _a.trys.push([17, 21, , 22]);
+                        return [4 /*yield*/, prepareMigrate(fromApi, toApi, storageItems, from, to)];
+                    case 18:
+                        migrationData = _a.sent();
+                        return [4 /*yield*/, this.parseSequence(flags["sequence"], storageItems)];
+                    case 19:
+                        sequence = _a.sent();
+                        failed_1 = new Array();
+                        return [4 /*yield*/, migrate(toApi, executor, sequence, migrationData, function (failedXts) {
+                                failed_1.push.apply(failed_1, failedXts);
+                                console.log("The following extrinsics failed during migration:");
+                                for (var _i = 0, failedXts_1 = failedXts; _i < failedXts_1.length; _i++) {
+                                    var xt = failedXts_1[_i];
+                                    console.log(xt.toHuman());
+                                }
+                            })];
+                    case 20:
+                        results = _a.sent();
+                        // TODO: Log results
+                        fromApi.disconnect();
+                        toApi.disconnect();
+                        return [3 /*break*/, 22];
+                    case 21:
+                        err_2 = _a.sent();
+                        return [3 /*break*/, 22];
+                    case 22: return [2 /*return*/];
                 }
             });
         });
     };
-    MigrateCommand.description = 'fork the state of an existing substrate based chain';
+    MigrateCommand.prototype.parseSequence = function (inputSequence, storageItems) {
+        return __awaiter(this, void 0, void 0, function () {
+            var sequence, _i, _a, one, element, index, _b, storageItems_2, element, _c, storageItems_3, element;
+            return __generator(this, function (_d) {
+                sequence = new Array();
+                if (inputSequence !== undefined && inputSequence.length > 0) {
+                    for (_i = 0, _a = command_1.flags["sequence"]; _i < _a.length; _i++) {
+                        one = _a[_i];
+                        element = common_1.parseModuleInput(one);
+                        index = storageItems.indexOf(element);
+                        if (index > -1) {
+                            storageItems.splice(index, 1);
+                        }
+                        else {
+                            // TODO: Log error and abort
+                        }
+                        sequence.push(element);
+                    }
+                    // Now append the remaining elements, if any are there
+                    for (_b = 0, storageItems_2 = storageItems; _b < storageItems_2.length; _b++) {
+                        element = storageItems_2[_b];
+                        sequence.push(element);
+                    }
+                }
+                else {
+                    for (_c = 0, storageItems_3 = storageItems; _c < storageItems_3.length; _c++) {
+                        element = storageItems_3[_c];
+                        sequence.push(element);
+                    }
+                }
+                return [2 /*return*/, sequence];
+            });
+        });
+    };
+    MigrateCommand.prototype.parseExecutor = function (filePath) {
+        return __awaiter(this, void 0, void 0, function () {
+            function capturePwd(isRead, cb) {
+                return __awaiter(this, void 0, void 0, function () {
+                    var rl;
+                    return __generator(this, function (_a) {
+                        rl = readline.createInterface({
+                            input: process.stdin,
+                            output: process.stdout
+                        });
+                        rl.question('Please provide the password for JSON-account-file: ', function (password) {
+                            // @ts-ignore
+                            rl.output.write("\n");
+                            // @ts-ignore
+                            rl.history.slice(1);
+                            rl.close();
+                            isRead = true;
+                            cb(password);
+                        });
+                        // @ts-ignore
+                        rl._writeToOutput = function _writeToOutput(stringToWrite) {
+                            // @ts-ignore
+                            rl.output.write("*");
+                        };
+                        return [2 /*return*/];
+                    });
+                });
+            }
+            var keyring, file, executor, pwd_1, isRead, err_3;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        keyring = new api_1.Keyring();
+                        _a.label = 1;
+                    case 1:
+                        _a.trys.push([1, 6, , 7]);
+                        file = fs.readFileSync(filePath);
+                        executor = keyring.addFromJson(JSON.parse(file.toString()));
+                        isRead = false;
+                        return [4 /*yield*/, capturePwd(isRead, function (password) {
+                                pwd_1 = password;
+                            })];
+                    case 2:
+                        _a.sent();
+                        _a.label = 3;
+                    case 3:
+                        if (!!isRead) return [3 /*break*/, 5];
+                        // Loop till user input is read...
+                        return [4 /*yield*/, new Promise(function (r) { return setTimeout(r, 500); })];
+                    case 4:
+                        // Loop till user input is read...
+                        _a.sent();
+                        return [3 /*break*/, 3];
+                    case 5:
+                        executor.unlock(pwd_1);
+                        return [2 /*return*/, executor];
+                    case 6:
+                        err_3 = _a.sent();
+                        return [3 /*break*/, 7];
+                    case 7: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    MigrateCommand.description = 'migrate the state of an existing substrate-v2 based chain to a substrate-v3 based chain';
     MigrateCommand.flags = {
         'source-network': command_1.flags.string({
             char: 's',
             description: 'the networks ws-endpoint the state shall be forked from',
+            required: true,
         }),
         'destination-network': command_1.flags.string({
             char: 'd',
             description: 'the networks ws-endpoint the state shall be ported to',
+            required: true,
         }),
-        'at-block': command_1.flags.string({
+        'from-block': command_1.flags.string({
             char: 'b',
-            description: 'specify at which block to take the state from the chain. Input must be a hash.',
+            description: 'specify at which block to take the state from the chain. Input must be a block number.',
             default: '-1',
         }),
-        'output': command_1.flags.boolean({
-            char: 'o'
+        'to-block': command_1.flags.string({
+            char: 'b',
+            description: 'specify at which block to insert the state from the chain. Input must be a block number.',
+            default: '-1',
+        }),
+        'executor': command_1.flags.string({
+            description: 'path to a json file, exported from polkadot-js, with which the migration shall be executed.',
+            required: true,
         }),
         'modules': command_1.flags.string({
             char: 'm',
             multiple: true,
+            description: 'defines additional modules that shall be migrated. Modules can be defined as `PALLET_NAME` or as `PALLET_NAME.STORAGE_ITEM`'
+        }),
+        'sequence': command_1.flags.string({
+            multiple: true,
+            description: 'defines the sequence of the migration. Modules can be defined as `PALLET_NAME` or as `PALLET_NAME.STORAGE_ITEM`. If not provided random sequence will be choosen.'
         }),
         'no-default': command_1.flags.boolean({
-            description: 'Do not fork the default modules. Namely: System, Balances',
-        }),
-        'full-chain': command_1.flags.boolean({
-            description: 'Fork all modules storages',
-            exclusive: ['no-default', 'modules'],
+            description: 'Do not migrate the default modules. Namely: System, Balances, Proxy, Vesting',
         })
     };
     return MigrateCommand;
@@ -225,55 +393,54 @@ function prepareMigrate(fromApi, toApi, storageItems, at, to) {
 }
 exports.prepareMigrate = prepareMigrate;
 function migrate(toApi, executor, sequence, data, cbErr) {
+    var _a;
     return __awaiter(this, void 0, void 0, function () {
-        var nonce, dispatcher, _i, sequence_1, one, palletData, _a, _b, _c, key, data_1, storageItemDataMap, storageItemData;
-        return __generator(this, function (_d) {
-            switch (_d.label) {
+        var nonce, dispatcher, _i, sequence_1, one, palletData, _b, _c, _d, key, data_1, storageItemData;
+        return __generator(this, function (_e) {
+            switch (_e.label) {
                 case 0: return [4 /*yield*/, toApi.query.system.account(executor.address)];
                 case 1:
-                    nonce = (_d.sent()).nonce;
+                    nonce = (_e.sent()).nonce;
                     dispatcher = new common_1.Dispatcher(toApi, executor, nonce.toBigInt(), cbErr, 10, 100);
                     _i = 0, sequence_1 = sequence;
-                    _d.label = 2;
+                    _e.label = 2;
                 case 2:
-                    if (!(_i < sequence_1.length)) return [3 /*break*/, 14];
+                    if (!(_i < sequence_1.length)) return [3 /*break*/, 15];
                     one = sequence_1[_i];
-                    if (!(one instanceof OneLevelSequenceElement)) return [3 /*break*/, 9];
-                    palletData = data.get(one.pallet);
+                    if (!(one instanceof common_1.PalletElement)) return [3 /*break*/, 9];
+                    palletData = data.get(one.palletHash);
                     if (!(palletData !== undefined)) return [3 /*break*/, 7];
-                    _a = 0, _b = Array.from(palletData);
-                    _d.label = 3;
+                    _b = 0, _c = Array.from(palletData);
+                    _e.label = 3;
                 case 3:
-                    if (!(_a < _b.length)) return [3 /*break*/, 6];
-                    _c = _b[_a], key = _c[0], data_1 = _c[1];
+                    if (!(_b < _c.length)) return [3 /*break*/, 6];
+                    _d = _c[_b], key = _d[0], data_1 = _d[1];
                     return [4 /*yield*/, dispatcher.sudoDispatch(data_1)];
                 case 4:
-                    _d.sent();
-                    _d.label = 5;
+                    _e.sent();
+                    _e.label = 5;
                 case 5:
-                    _a++;
+                    _b++;
                     return [3 /*break*/, 3];
                 case 6: return [3 /*break*/, 8];
-                case 7: throw Error("Sequence element was NOT part of transformation.");
-                case 8: return [3 /*break*/, 13];
+                case 7: throw Error("Sequence element was NOT part of transformation. Pallet: " + one.pallet);
+                case 8: return [3 /*break*/, 14];
                 case 9:
-                    if (!(one instanceof TwoLevelSequenceElement)) return [3 /*break*/, 12];
-                    storageItemDataMap = data.get(one.pallet);
-                    storageItemData = storageItemDataMap.get(one.getStorageKey());
+                    if (!(one instanceof common_1.StorageItemElement)) return [3 /*break*/, 13];
+                    storageItemData = (_a = data.get(one.palletHash)) === null || _a === void 0 ? void 0 : _a.get(one.key);
                     if (!(storageItemData !== undefined)) return [3 /*break*/, 11];
                     return [4 /*yield*/, dispatcher.sudoDispatch(storageItemData)];
                 case 10:
-                    _d.sent();
-                    return [3 /*break*/, 11];
-                case 11: return [3 /*break*/, 13];
-                case 12: throw Error("Unimplemented Sequence. No migration happening.");
-                case 13:
+                    _e.sent();
+                    return [3 /*break*/, 12];
+                case 11: throw Error("Sequence element was NOT part of transformation. Pallet: " + one.pallet + ", Item: " + one.item);
+                case 12: return [3 /*break*/, 14];
+                case 13: throw Error("Unreachable Code. qed.");
+                case 14:
                     _i++;
                     return [3 /*break*/, 2];
-                case 14:
-                    console.log("Awaiting results now...");
-                    return [4 /*yield*/, dispatcher.getResults()];
-                case 15: return [2 /*return*/, _d.sent()];
+                case 15: return [4 /*yield*/, dispatcher.getResults()];
+                case 16: return [2 /*return*/, _e.sent()];
             }
         });
     });
@@ -356,7 +523,7 @@ function prepareProxyProxies(toApi, values) {
                     if (packetOfProxies.length === maxProxies - 1 || counter === values.length) {
                         accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32));
                         proxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', item.value);
-                        console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
+                        //console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
                         packetOfProxies.push([accountId, item.optional, item.value]);
                         xts.push(toApi.tx.migration.migrateProxyProxies(packetOfProxies));
                         packetOfProxies = new Array();
@@ -364,7 +531,7 @@ function prepareProxyProxies(toApi, values) {
                     else {
                         accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32));
                         proxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', item.value);
-                        console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
+                        //console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
                         packetOfProxies.push([accountId, item.optional, item.value]);
                     }
                 }
@@ -545,9 +712,9 @@ function prepareVestingVestingInfo(toApi, values) {
 }
 function test_run() {
     return __awaiter(this, void 0, void 0, function () {
-        var wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadataFrom, metadataTo, _loop_2, _i, storageItems_2, key, lastHdr, at, keyItems, _a, storageItems_3, stringKey, migrationData, sequence, keyring, alice, failed, results;
-        return __generator(this, function (_b) {
-            switch (_b.label) {
+        var wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadataFrom, metadataTo, lastFromHdr, at, lastToHdr, to, migrationData, sequence, keyring, alice, failed, results;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
                 case 0:
                     wsProviderFrom = new api_1.WsProvider("wss://fullnode-archive.centrifuge.io");
                     return [4 /*yield*/, api_1.ApiPromise.create({
@@ -559,7 +726,7 @@ function test_run() {
                             }
                         })];
                 case 1:
-                    fromApi = _b.sent();
+                    fromApi = _a.sent();
                     wsProviderTo = new api_1.WsProvider("ws://127.0.0.1:9946");
                     return [4 /*yield*/, api_1.ApiPromise.create({
                             provider: wsProviderTo,
@@ -570,77 +737,40 @@ function test_run() {
                             }
                         })];
                 case 2:
-                    toApi = _b.sent();
-                    storageItems = [
-                        util_crypto_1.xxhashAsHex('Vesting', 128) + util_crypto_1.xxhashAsHex("Vesting", 128).slice(2),
-                        util_crypto_1.xxhashAsHex('Proxy', 128) + util_crypto_1.xxhashAsHex("Proxies", 128).slice(2)
-                    ];
-                    storageItems.push.apply(storageItems, common_1.DefaultStorage);
+                    toApi = _a.sent();
+                    storageItems = new Array();
+                    storageItems.push.apply(storageItems, common_1.getDefaultStorage());
                     return [4 /*yield*/, fromApi.rpc.state.getMetadata()];
                 case 3:
-                    metadataFrom = _b.sent();
+                    metadataFrom = _a.sent();
                     return [4 /*yield*/, fromApi.rpc.state.getMetadata()];
                 case 4:
-                    metadataTo = _b.sent();
-                    _loop_2 = function (key) {
-                        var availableFrom = false;
-                        var availableTo = false;
-                        metadataFrom.asLatest.modules.forEach(function (module) {
-                            if (module.storage.isSome) {
-                                if (key.startsWith(util_crypto_1.xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
-                                    availableFrom = true;
-                                }
-                            }
-                        });
-                        metadataTo.asLatest.modules.forEach(function (module) {
-                            if (module.storage.isSome) {
-                                if (key.startsWith(util_crypto_1.xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
-                                    availableTo = true;
-                                }
-                            }
-                        });
-                        if (!availableFrom || !availableTo) {
-                            console.log("Storage with key " + key + " is not available");
-                            storageItems.filter(function (val) { return key != val; });
-                        }
-                    };
-                    // Check if module is available
-                    // Iteration is death, but we do not care here...
-                    for (_i = 0, storageItems_2 = storageItems; _i < storageItems_2.length; _i++) {
-                        key = storageItems_2[_i];
-                        _loop_2(key);
-                    }
+                    metadataTo = _a.sent();
                     return [4 /*yield*/, fromApi.rpc.chain.getHeader()];
                 case 5:
-                    lastHdr = _b.sent();
-                    at = lastHdr.hash;
-                    keyItems = [];
-                    for (_a = 0, storageItems_3 = storageItems; _a < storageItems_3.length; _a++) {
-                        stringKey = storageItems_3[_a];
-                        keyItems.push(fromApi.createType("StorageKey", stringKey));
-                    }
-                    return [4 /*yield*/, prepareMigrate(fromApi, toApi, keyItems, at, at)];
+                    lastFromHdr = _a.sent();
+                    at = lastFromHdr.hash;
+                    return [4 /*yield*/, toApi.rpc.chain.getHeader()];
                 case 6:
-                    migrationData = _b.sent();
-                    sequence = new Array();
-                    sequence.push(new TwoLevelSequenceElement(util_crypto_1.xxhashAsHex("Balances", 128), util_crypto_1.xxhashAsHex("TotalIssuance", 128)));
-                    sequence.push(new TwoLevelSequenceElement(util_crypto_1.xxhashAsHex("System", 128), util_crypto_1.xxhashAsHex("Account", 128)));
-                    sequence.push(new TwoLevelSequenceElement(util_crypto_1.xxhashAsHex("Vesting", 128), util_crypto_1.xxhashAsHex("Vesting", 128)));
-                    sequence.push(new TwoLevelSequenceElement(util_crypto_1.xxhashAsHex("Proxy", 128), util_crypto_1.xxhashAsHex("Proxies", 128)));
+                    lastToHdr = _a.sent();
+                    to = lastToHdr.hash;
+                    return [4 /*yield*/, prepareMigrate(fromApi, toApi, storageItems, at, to)];
+                case 7:
+                    migrationData = _a.sent();
+                    sequence = storageItems;
                     keyring = new api_1.Keyring({ type: 'sr25519' });
                     alice = keyring.addFromUri('//Alice');
                     failed = new Array();
                     return [4 /*yield*/, migrate(toApi, alice, sequence, migrationData, function (failedXts) {
                             failed.push.apply(failed, failedXts);
                             console.log("The following extrinsics failed");
-                            for (var _i = 0, failedXts_1 = failedXts; _i < failedXts_1.length; _i++) {
-                                var xt = failedXts_1[_i];
+                            for (var _i = 0, failedXts_2 = failedXts; _i < failedXts_2.length; _i++) {
+                                var xt = failedXts_2[_i];
                                 console.log(xt.toJSON());
                             }
                         })];
-                case 7:
-                    results = _b.sent();
-                    console.log(results);
+                case 8:
+                    results = _a.sent();
                     fromApi.disconnect();
                     toApi.disconnect();
                     return [2 /*return*/];
@@ -649,39 +779,4 @@ function test_run() {
     });
 }
 exports.test_run = test_run;
-// Abstract migration element and then whole pallet or just item.
-var SequenceElement = /** @class */ (function () {
-    function SequenceElement(inSequence, isPallet) {
-        this.inSequence = inSequence;
-        this.isPallet = isPallet;
-    }
-    return SequenceElement;
-}());
-var OneLevelSequenceElement = /** @class */ (function (_super) {
-    __extends(OneLevelSequenceElement, _super);
-    function OneLevelSequenceElement(pallet, inSequence) {
-        if (inSequence === void 0) { inSequence = false; }
-        var _this = _super.call(this, inSequence, true) || this;
-        _this.pallet = pallet;
-        return _this;
-    }
-    OneLevelSequenceElement.prototype.getStorageKey = function () {
-        return (this.pallet);
-    };
-    return OneLevelSequenceElement;
-}(SequenceElement));
-var TwoLevelSequenceElement = /** @class */ (function (_super) {
-    __extends(TwoLevelSequenceElement, _super);
-    function TwoLevelSequenceElement(pallet, storageItem, inSequence) {
-        if (inSequence === void 0) { inSequence = false; }
-        var _this = _super.call(this, inSequence, false) || this;
-        _this.pallet = pallet;
-        _this.storageItem = storageItem;
-        return _this;
-    }
-    TwoLevelSequenceElement.prototype.getStorageKey = function () {
-        return (this.pallet + this.storageItem.slice(2));
-    };
-    return TwoLevelSequenceElement;
-}(SequenceElement));
 //# sourceMappingURL=migrate.js.map

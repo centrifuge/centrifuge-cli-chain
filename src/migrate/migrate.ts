@@ -2,122 +2,268 @@
 import Command, {flags} from '@oclif/command'
 import {ApiPromise, Keyring, SubmittableResult, WsProvider} from "@polkadot/api";
 import { xxhashAsHex} from "@polkadot/util-crypto";
-import {AccountId, Balance, Hash, VestingInfo} from "@polkadot/types/interfaces";
-
-import {DefaultStorage, Dispatcher, insertOrNewMap, toByteArray, toHexString} from "../common/common";
+import {AccountId, Balance, Hash, ModuleMetadataLatest, VestingInfo} from "@polkadot/types/interfaces";
+import * as fs from 'fs';
+import * as readline from 'readline';
+import {
+    checkAvailability,
+    Dispatcher,
+    StorageItemElement, PalletElement,
+    parseModuleInput,
+    StorageElement,
+    getDefaultStorage
+} from "../common/common";
 import {StorageItem, transform, StorageValueValue, StorageMapValue, StorageDoubleMapValue} from "../transform/transform";
 import {ApiTypes, SubmittableExtrinsic} from "@polkadot/api/types";
 import {KeyringPair} from "@polkadot/keyring/types";
 import {bool, StorageKey} from "@polkadot/types";
+import {fork} from "../fork/fork";
+
+const AvailableMigrations = [
+    parseModuleInput("Balances.TotalIssuance"),
+    parseModuleInput("System.Account"),
+    parseModuleInput("Vesting.Vesting"),
+    parseModuleInput("Proxy.Proxies"),
+];
 
 export default class MigrateCommand extends Command {
     fromApi: ApiPromise;
     toApi: ApiPromise;
 
-    static description = 'fork the state of an existing substrate based chain';
+    static description = 'migrate the state of an existing substrate-v2 based chain to a substrate-v3 based chain';
 
     static flags = {
         'source-network': flags.string({
             char: 's',
             description: 'the networks ws-endpoint the state shall be forked from',
+            required: true,
         }),
         'destination-network': flags.string({
             char: 'd',
             description: 'the networks ws-endpoint the state shall be ported to',
+            required: true,
         }),
-        'at-block': flags.string({
+        'from-block': flags.string({
             char: 'b',
-            description: 'specify at which block to take the state from the chain. Input must be a hash.',
+            description: 'specify at which block to take the state from the chain. Input must be a block number.',
             default: '-1',
         }),
-        'output': flags.boolean({
-            char: 'o'
+        'to-block': flags.string({
+            char: 'b',
+            description: 'specify at which block to insert the state from the chain. Input must be a block number.',
+            default: '-1',
+        }),
+        'executor': flags.string({
+            description: 'path to a json file, exported from polkadot-js, with which the migration shall be executed.',
+            required: true,
         }),
         'modules': flags.string({
             char: 'm',
             multiple: true,
-
+            description: 'defines additional modules that shall be migrated. Modules can be defined as `PALLET_NAME` or as `PALLET_NAME.STORAGE_ITEM`'
+        }),
+        'sequence': flags.string({
+            multiple: true,
+            description: 'defines the sequence of the migration. Modules can be defined as `PALLET_NAME` or as `PALLET_NAME.STORAGE_ITEM`. If not provided random sequence will be choosen.'
         }),
         'no-default': flags.boolean({
-            description: 'Do not fork the default modules. Namely: System, Balances',
-        }),
-        'full-chain': flags.boolean({
-            description: 'Fork all modules storages',
-            exclusive: ['no-default', 'modules'],
+            description: 'Do not migrate the default modules. Namely: System, Balances, Proxy, Vesting',
         })
     };
 
     async run() {
         const {flags} = this.parse(MigrateCommand);
 
+        if (flags["source-network"] === flags["destination-network"]) {
+            // TODO: Log error and abort
+        }
+
+        let executor = await this.parseExecutor(flags["executor"]);
+
         const wsProviderFrom = new WsProvider(flags["source-network"]);
         const fromApi = await ApiPromise.create({
-            provider: wsProviderFrom
+            provider: wsProviderFrom,
+            types: {
+                ProxyType: {
+                    _enum: ['Any', 'NonTransfer', 'Governance', 'Staking', 'Vesting']
+                }
+            }
         });
 
         const wsProviderTo = new WsProvider(flags["destination-network"]);
         const toApi = await ApiPromise.create({
-            provider: wsProviderTo
+            provider: wsProviderTo,
+            types: {
+                ProxyType: {
+                    _enum: ['Any', 'NonTransfer', 'Governance', '_Staking', 'NonProxy']
+                }
+            }
         });
 
         this.fromApi = fromApi;
         this.toApi = toApi
 
-        let storageItems = flags["modules"];
-
-        // Transfrom modules into correct hashes
-        storageItems.forEach((item) => {
-
+        // Transform modules input
+        let storageItems = flags["modules"].map((value, index) => {
+            return parseModuleInput(value);
         });
 
         if (!flags["no-default"]) {
-            storageItems.push(...DefaultStorage);
+            storageItems.push(...getDefaultStorage());
         }
 
-        const metadata = await this.fromApi.rpc.state.getMetadata();
-        const modules = metadata.asLatest.modules;
-
-        // Check if module is available
-        // Iteration is death, but we do not care here...
-        for (let key of storageItems) {
-            let available = false;
-            metadata.asLatest.modules.forEach((module) => {
-                if (module.storage.isSome) {
-                    if (key.startsWith(xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
-                        available = true
-                    }
-                }
-            });
-
-            if (!available) {
-                console.log("Storage with key " + key +" is not available")
-                storageItems.filter((val) => key != val)
+        // Check if we can do this migration
+        for(let item of storageItems) {
+            if(!AvailableMigrations.includes(item)) {
+                // TODO: Log error and abort
             }
         }
 
+        const metadataFrom = await this.fromApi.rpc.state.getMetadata();
+        const metadataTo = await this.toApi.rpc.state.getMetadata();
 
-        let at: Hash;
-
-        if (flags["at-block"] == '-1') {
-            const lastHdr = await this.fromApi.rpc.chain.getHeader();
-            at = lastHdr.hash;
-        } else {
-            at = this.fromApi.createType("Hash", flags["at-block"]);
+        if (!await checkAvailability(metadataFrom.asLatest.modules, metadataTo.asLatest.modules, storageItems)) {
+            // TODO: Log error and abort
         }
 
-        //let migrationData = await prepareMigrate(this.fromApi, this.toApi, storageItems, at, at) // TODO: Add actual to from parachain
-         //   .catch((err) => console.log(err)); // TODO: Do something usefull with error and abort.
+        let from: Hash;
+        if (flags["from-block"] == '-1') {
+            const lastHdr = await this.fromApi.rpc.chain.getHeader();
+            from = lastHdr.hash;
+        } else {
+            let bn = parseInt(flags['from-block']);
+            if (bn !== undefined) {
+                from = await this.fromApi.rpc.chain.getBlockHash(bn);
+            } else {
+                // TODO: Log error and abort
+            }
+        }
 
+        let to: Hash;
+        if (flags["to-block"] == '-1') {
+            const lastHdr = await this.toApi.rpc.chain.getHeader();
+            to = lastHdr.hash;
+        } else {
+            let bn = parseInt(flags['to-block']);
+            if (bn !== undefined) {
+                try {
+                    to = await this.toApi.rpc.chain.getBlockHash(bn)
+                } catch (err) {
+                    // TODO: Log error and abort
+                }
+            } else {
+                // TODO: Log error and abort
+            }
+        }
 
+        try {
+            let migrationData = await prepareMigrate(fromApi, toApi, storageItems, from, to);
+            let sequence: Array<StorageElement> = await this.parseSequence(flags["sequence"], storageItems);
+            let failed: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>> = new Array();
 
-        if (flags["output"]) {
-            // TODO: Write stuff to a file here, correctly as a json
-            //       * define json format
+            let results = await migrate(toApi, executor, sequence, migrationData, (failedXts) => {
+                failed.push(...failedXts);
+                console.log("The following extrinsics failed during migration:");
+
+                for (const xt of failedXts) {
+                    console.log(xt.toHuman())
+                }
+            });
+
+            // TODO: Log results
+            fromApi.disconnect();
+            toApi.disconnect();
+        } catch (err) {
+            // TODO: Log error and abort
         }
     }
+
+    async parseSequence(inputSequence: string[],  storageItems: StorageElement[]): Promise<StorageElement[]> {
+        let sequence = new Array();
+
+        if (inputSequence !== undefined && inputSequence.length > 0) {
+            for(let one of flags["sequence"]) {
+                let element = parseModuleInput(one);
+
+                // Need to remove element, as it is not mandatory to name
+                // all elements in the sequence, the rest will be randomly
+                // appended in the end.
+                const index = storageItems.indexOf(element);
+                if (index > -1) {
+                    storageItems.splice(index, 1);
+                } else {
+                    // TODO: Log error and abort
+                }
+
+                sequence.push(element);
+            }
+
+            // Now append the remaining elements, if any are there
+            for (let element of storageItems) {
+                sequence.push(element);
+            }
+
+        } else {
+            for (let element of storageItems) {
+                sequence.push(element);
+            }
+        }
+
+        return sequence;
+    }
+
+    async parseExecutor(filePath: string): Promise<KeyringPair> {
+        let keyring = new Keyring();
+
+        try {
+            let file = fs.readFileSync(filePath);
+            let executor = keyring.addFromJson(JSON.parse(file.toString()));
+
+            let pwd;
+            let isRead = false;
+            await capturePwd(isRead, (password) => {
+                pwd = password;
+            });
+
+            while (!isRead){
+                // Loop till user input is read...
+                await new Promise(r => setTimeout(r, 500));
+            }
+            executor.unlock(pwd);
+
+            return executor;
+        } catch (err) {
+          // TODO: Log error and abort;
+        }
+
+        async function capturePwd(isRead: boolean, cb: (string) => void) {
+            const rl = readline.createInterface({
+                input: process.stdin,
+                output: process.stdout
+            });
+
+            rl.question('Please provide the password for JSON-account-file: ', function(password) {
+                // @ts-ignore
+                rl.output.write("\n");
+                // @ts-ignore
+                rl.history.slice(1);
+                rl.close();
+                isRead = true;
+                cb(password);
+            });
+            // @ts-ignore
+            rl._writeToOutput = function _writeToOutput(stringToWrite) {
+                // @ts-ignore
+                rl.output.write("*");
+            };
+        }
+    }
+
 }
 
-export async function prepareMigrate(fromApi: ApiPromise, toApi: ApiPromise, storageItems: Array<StorageKey>, at: Hash, to: Hash): Promise<Map<string, Map<string, Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>>>> {
+
+
+export async function prepareMigrate(fromApi: ApiPromise, toApi: ApiPromise, storageItems: Array<StorageElement>, at: Hash, to: Hash): Promise<Map<string, Map<string, Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>>>> {
     let transformedData = Array.from(await transform(fromApi, toApi, storageItems, at, to));
 
     let migrationXts: Map<string, Map<string, Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>>> = new Map();
@@ -152,7 +298,7 @@ export async function prepareMigrate(fromApi: ApiPromise, toApi: ApiPromise, sto
 export async function migrate(
     toApi: ApiPromise,
     executor: KeyringPair,
-    sequence: Array<SequenceElement>,
+    sequence: Array<StorageElement>,
     data: Map<string, Map<string, Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>>>,
     cbErr: (failed: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>) => void
 ) : Promise<Array<[Hash, bigint]>>
@@ -162,29 +308,29 @@ export async function migrate(
     let dispatcher = new Dispatcher(toApi, executor, nonce.toBigInt(), cbErr, 10, 100);
 
     for (const one of sequence) {
-        if (one instanceof OneLevelSequenceElement) {
-            let palletData = data.get(one.pallet)
+        if (one instanceof PalletElement) {
+            let palletData = data.get(one.palletHash);
             if (palletData !== undefined) {
                 for(const [key, data] of Array.from(palletData)) {
                     await dispatcher.sudoDispatch(data);
                 }
             } else {
-                throw Error("Sequence element was NOT part of transformation.");
+                throw Error("Sequence element was NOT part of transformation. Pallet: " + one.pallet);
             }
-        } else if (one instanceof TwoLevelSequenceElement) {
-            let storageItemDataMap = data.get(one.pallet)
-            let storageItemData = storageItemDataMap.get(one.getStorageKey());
+
+        } else if (one instanceof StorageItemElement) {
+            let storageItemData = data.get(one.palletHash)?.get(one.key)
+
             if (storageItemData !== undefined) {
                 await dispatcher.sudoDispatch(storageItemData)
             } else {
-                //throw Error("Sequence element was NOT part of transformation.");
+                throw Error("Sequence element was NOT part of transformation. Pallet: " + one.pallet + ", Item: " + one.item);
             }
         } else {
-            throw Error("Unimplemented Sequence. No migration happening.")
+            throw Error("Unreachable Code. qed.")
         }
     }
 
-    console.log("Awaiting results now...")
     return await dispatcher.getResults();
 }
 
@@ -240,7 +386,8 @@ async function prepareProxyProxies(toApi: ApiPromise, values: StorageItem[]): Pr
                 let accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32))
                 // @ts-ignore
                 let proxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', item.value);
-                console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
+
+                //console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
                 packetOfProxies.push([accountId, item.optional, item.value])
 
                 xts.push(toApi.tx.migration.migrateProxyProxies(packetOfProxies))
@@ -250,7 +397,7 @@ async function prepareProxyProxies(toApi: ApiPromise, values: StorageItem[]): Pr
                 let accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32))
                 // @ts-ignore
                 let proxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', item.value);
-                console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
+                //console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
 
                 packetOfProxies.push([accountId, item.optional, item.value])
             }
@@ -380,7 +527,6 @@ async function prepareVestingVestingInfo(toApi: ApiPromise, values: StorageItem[
 }
 
 
-
 export async function test_run() {
     const wsProviderFrom = new WsProvider("wss://fullnode-archive.centrifuge.io");
     const fromApi = await ApiPromise.create({
@@ -403,64 +549,23 @@ export async function test_run() {
         }
     });
 
-
-    let storageItems: Array<string> = [
-        xxhashAsHex('Vesting', 128) + xxhashAsHex("Vesting", 128).slice(2),
-        xxhashAsHex('Proxy', 128) + xxhashAsHex("Proxies", 128).slice(2)
-    ];
-
-    storageItems.push(...DefaultStorage);
+    let storageItems = new Array();
+    storageItems.push(...getDefaultStorage());
 
     const metadataFrom = await fromApi.rpc.state.getMetadata();
     const metadataTo = await fromApi.rpc.state.getMetadata();
 
-    // Check if module is available
-    // Iteration is death, but we do not care here...
-    for (let key of storageItems) {
-        let availableFrom = false;
-        let availableTo = false;
 
-        metadataFrom.asLatest.modules.forEach((module) => {
-            if (module.storage.isSome) {
-                if (key.startsWith(xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
-                    availableFrom = true
-                }
-            }
-        });
+    const lastFromHdr = await fromApi.rpc.chain.getHeader();
+    let at = lastFromHdr.hash;
+    const lastToHdr = await toApi.rpc.chain.getHeader();
+    let to = lastToHdr.hash;
 
-        metadataTo.asLatest.modules.forEach((module) => {
-            if (module.storage.isSome) {
-                if (key.startsWith(xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
-                    availableTo = true
-                }
-            }
-        });
+    let migrationData = await prepareMigrate(fromApi, toApi, storageItems, at, to);
 
-        if (!availableFrom || !availableTo) {
-            console.log("Storage with key " + key +" is not available")
-            storageItems.filter((val) => key != val)
-        }
-    }
+    let sequence: Array<StorageElement> = storageItems;
 
-
-    const lastHdr = await fromApi.rpc.chain.getHeader();
-    let at = lastHdr.hash;
-
-    let keyItems = [];
-
-    for (const stringKey of storageItems) {
-        keyItems.push(fromApi.createType("StorageKey", stringKey));
-    }
-
-    let migrationData = await prepareMigrate(fromApi, toApi, keyItems, at, at); // TODO: Add actual to hash from parachain
-
-    let sequence: Array<SequenceElement> = new Array();
-    sequence.push(new TwoLevelSequenceElement(xxhashAsHex("Balances", 128),  xxhashAsHex("TotalIssuance", 128)));
-    sequence.push(new TwoLevelSequenceElement( xxhashAsHex("System", 128),  xxhashAsHex("Account", 128)));
-    sequence.push(new TwoLevelSequenceElement( xxhashAsHex("Vesting", 128),  xxhashAsHex("Vesting", 128)));
-    sequence.push(new TwoLevelSequenceElement( xxhashAsHex("Proxy", 128),  xxhashAsHex("Proxies", 128)));
-
-    const keyring = new Keyring({ type: 'sr25519'});
+    const keyring = new Keyring({type: 'sr25519'});
     let alice = keyring.addFromUri('//Alice');
     let failed: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>> = new Array();
 
@@ -473,50 +578,6 @@ export async function test_run() {
         }
     });
 
-    console.log(results);
-
     fromApi.disconnect();
     toApi.disconnect();
-}
-
-// Abstract migration element and then whole pallet or just item.
-
-abstract class SequenceElement {
-    readonly inSequence: boolean;
-    readonly isPallet: boolean
-    abstract getStorageKey(): string;
-
-    constructor(inSequence: boolean, isPallet: boolean) {
-        this.inSequence = inSequence;
-        this.isPallet = isPallet;
-    }
-}
-
-class OneLevelSequenceElement extends SequenceElement {
-    readonly pallet: string;
-
-    constructor(pallet: string, inSequence: boolean = false) {
-        super(inSequence, true);
-
-        this.pallet = pallet;
-    }
-
-    getStorageKey(): string {
-        return (this.pallet);
-    }
-}
-
-class TwoLevelSequenceElement extends SequenceElement{
-    readonly pallet: string;
-    readonly storageItem: string;
-
-    constructor(pallet: string, storageItem: string, inSequence: boolean = false) {
-        super(inSequence, false);
-        this.pallet = pallet;
-        this.storageItem = storageItem;
-    }
-
-    getStorageKey(): string {
-        return ( this.pallet + this.storageItem.slice(2));
-    }
 }

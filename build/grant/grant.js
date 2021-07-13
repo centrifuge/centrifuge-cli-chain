@@ -1,7 +1,19 @@
 "use strict";
-// Tasks of this module
-//
-// *dd Distribute the inputs to the correct commands
+var __extends = (this && this.__extends) || (function () {
+    var extendStatics = function (d, b) {
+        extendStatics = Object.setPrototypeOf ||
+            ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
+            function (d, b) { for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p]; };
+        return extendStatics(d, b);
+    };
+    return function (d, b) {
+        if (typeof b !== "function" && b !== null)
+            throw new TypeError("Class extends value " + String(b) + " is not a constructor or null");
+        extendStatics(d, b);
+        function __() { this.constructor = d; }
+        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -39,18 +51,68 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-var fork_js_1 = require("./fork/fork.js");
-function main() {
+exports.test_run = void 0;
+var fs = require("fs");
+var papaparse = require("papaparse");
+function test_run() {
     return __awaiter(this, void 0, void 0, function () {
         return __generator(this, function (_a) {
-            switch (_a.label) {
-                case 0: return [4 /*yield*/, fork_js_1.test_run()];
-                case 1:
-                    _a.sent();
-                    return [2 /*return*/];
-            }
+            return [2 /*return*/];
         });
     });
 }
-main().then().catch(function (e) { return console.log(e); });
-//# sourceMappingURL=index.js.map
+exports.test_run = test_run;
+function loadCSV(file, isVesting) {
+    return __awaiter(this, void 0, void 0, function () {
+        var read, resultsLocal;
+        return __generator(this, function (_a) {
+            read = fs.readFileSync(file, 'utf8');
+            papaparse.parse(read, {
+                complete: function (results) {
+                    resultsLocal = results;
+                }
+            });
+            return [2 /*return*/, resultsLocal];
+        });
+    });
+}
+function verify(grantes) {
+    return __awaiter(this, void 0, void 0, function () {
+        return __generator(this, function (_a) {
+            return [2 /*return*/];
+        });
+    });
+}
+var Grant = /** @class */ (function () {
+    function Grant(who, howMuch) {
+        this.grantee = who;
+        this.amount = howMuch;
+    }
+    Grant.prototype.verify = function (api) {
+        return __awaiter(this, void 0, void 0, function () {
+            return __generator(this, function (_a) {
+                return [2 /*return*/];
+            });
+        });
+    };
+    return Grant;
+}());
+var VestingGrant = /** @class */ (function (_super) {
+    __extends(VestingGrant, _super);
+    function VestingGrant(who, howMuch, start, period, perBlock) {
+        var _this = _super.call(this, who, howMuch) || this;
+        _this.vestingStart = start;
+        _this.vestingPeriod = period;
+        _this.perBlock = perBlock;
+        return _this;
+    }
+    VestingGrant.prototype.verify = function (api) {
+        return __awaiter(this, void 0, void 0, function () {
+            return __generator(this, function (_a) {
+                return [2 /*return*/];
+            });
+        });
+    };
+    return VestingGrant;
+}(Grant));
+//# sourceMappingURL=grant.js.map

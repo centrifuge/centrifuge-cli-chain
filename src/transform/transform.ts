@@ -3,11 +3,21 @@ import Command, {flags} from '@oclif/command'
 import {ApiPromise, WsProvider} from "@polkadot/api";
 import { xxhashAsHex } from "@polkadot/util-crypto";
 import {Balance, Hash, ProxyDefinition} from "@polkadot/types/interfaces";
-
 import { fork } from "../fork/fork";
-import {toHexString, DefaultStorage, insertOrNewMap} from "../common/common";
-import {prepareMigrate} from "../migrate/migrate";
+import {
+    insertOrNewMap,
+    StorageElement,
+    parseModuleInput,
+    checkAvailability, getDefaultStorage
+} from "../common/common";
 import {StorageKey} from "@polkadot/types";
+
+const AvailableTransformations = [
+    parseModuleInput("Balances.TotalIssuance"),
+    parseModuleInput("System.Account"),
+    parseModuleInput("Vesting.Vesting"),
+    parseModuleInput("Proxy.Proxies"),
+];
 
 export default class TransformCommand extends Command {
     fromApi: ApiPromise;
@@ -19,23 +29,26 @@ export default class TransformCommand extends Command {
         'source-network': flags.string({
             char: 's',
             description: 'the networks ws-endpoint the state shall be forked from',
-            default: 'wss://portal.chain.centrifuge.io',
+            required: true,
         }),
         'destination-network': flags.string({
             char: 'd',
             description: 'the networks ws-endpoint the state shall be ported to',
-            default: 'wss://portal.chain.centrifuge.io',
+            required: true,
         }),
-        'at-block': flags.string({
+        'from-block': flags.string({
             char: 'b',
-            description: 'specify at which block to take the state from the chain. Input must be a hash.',
+            description: 'specify at which block to take the state from the chain. Input must be a block number.',
             default: '-1',
         }),
-        'as-genesis': flags.boolean({
-            char: 'g'
+        'to-block': flags.string({
+            char: 'b',
+            description: 'specify at which block to insert the state from the chain. Input must be a block number.',
+            default: '-1',
         }),
         'output': flags.boolean({
-            char: 'o'
+            char: 'o',
+            description: 'If provided defines, where to ouput, the transformed data (Key, value)-pairs.'
         }),
         'modules': flags.string({
             char: 'm',
@@ -43,93 +56,108 @@ export default class TransformCommand extends Command {
 
         }),
         'no-default': flags.boolean({
-            description: 'Do not fork the default modules. Namely: System, Balances',
+            description: 'Do not transform the default storage.',
         }),
-        'full-chain': flags.boolean({
-            description: 'Fork all modules storages',
-            exclusive: ['no-default', 'modules'],
-        })
     };
 
     async run() {
         const {flags} = this.parse(TransformCommand);
 
+        if (flags["source-network"] === flags["destination-network"]) {
+            // TODO: Log error and abort
+        }
+
         const wsProviderFrom = new WsProvider(flags["source-network"]);
         const fromApi = await ApiPromise.create({
-            provider: wsProviderFrom
+            provider: wsProviderFrom,
+            types: {
+                ProxyType: {
+                    _enum: ['Any', 'NonTransfer', 'Governance', 'Staking', 'Vesting']
+                }
+            }
         });
 
         const wsProviderTo = new WsProvider(flags["destination-network"]);
         const toApi = await ApiPromise.create({
-            provider: wsProviderTo
+            provider: wsProviderTo,
+            types: {
+                ProxyType: {
+                    _enum: ['Any', 'NonTransfer', 'Governance', '_Staking', 'NonProxy']
+                }
+            }
         });
 
         this.fromApi = fromApi;
         this.toApi = toApi
 
-        let storageItems = flags["modules"];
-
-        // Transfrom modules into correct hashes
-        storageItems.forEach((item) => {
-
+        // Transform modules input
+        let storageItems = flags["modules"].map((value, index) => {
+            return parseModuleInput(value);
         });
 
         if (!flags["no-default"]) {
-            storageItems.push(...DefaultStorage);
+            storageItems.push(...getDefaultStorage());
         }
 
-        const metadata = await this.fromApi.rpc.state.getMetadata();
-        const modules = metadata.asLatest.modules;
-
-        // Check if module is available
-        // Iteration is death, but we do not care here...
-        for (let key of storageItems) {
-            let available = false;
-            metadata.asLatest.modules.forEach((module) => {
-                if (module.storage.isSome) {
-                    if (key.startsWith(xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
-                        available = true
-                    }
-                }
-            });
-
-            if (!available) {
-                console.log("Storage with key " + key +" is not available")
-                storageItems.filter((val) => key != val)
+        // Check if we can do this migration
+        for(let item of storageItems) {
+            if(!AvailableTransformations.includes(item)) {
+                // TODO: Log error and abort
             }
         }
 
+        const metadataFrom = await this.fromApi.rpc.state.getMetadata();
+        const metadataTo = await this.toApi.rpc.state.getMetadata();
 
-        let at: Hash;
+        if (!await checkAvailability(metadataFrom.asLatest.modules, metadataTo.asLatest.modules, storageItems)) {
+            // TODO: Log error and abort
+        }
 
-        if (flags["at-block"] == '-1') {
+        let from: Hash;
+        if (flags["from-block"] == '-1') {
             const lastHdr = await this.fromApi.rpc.chain.getHeader();
-            at = lastHdr.hash;
+            from = lastHdr.hash;
         } else {
-            at = this.fromApi.createType("Hash", flags["at-block"]);
+            let bn = parseInt(flags['from-block']);
+            if (bn !== undefined) {
+                from = await this.fromApi.rpc.chain.getBlockHash(bn);
+            } else {
+                // TODO: Log error and abort
+            }
+        }
+
+        let to: Hash;
+        if (flags["to-block"] == '-1') {
+            const lastHdr = await this.toApi.rpc.chain.getHeader();
+            to = lastHdr.hash;
+        } else {
+            let bn = parseInt(flags['to-block']);
+            if (bn !== undefined) {
+                try {
+                    to = await this.toApi.rpc.chain.getBlockHash(bn)
+                } catch (err) {
+                    // TODO: Log error and abort
+                }
+            } else {
+                // TODO: Log error and abort
+            }
         }
 
         try {
-            //let state = await transform(this.fromApi, this.toApi, storageItems, at, at); // TODO: add actual to hash from parachain
+            let state = await transform(this.fromApi, this.toApi, storageItems, from, to);
+
+            if (flags["output"]) {
+                // TODO: Write stuff to a file here, correctly as a json
+                //       * define json format
+            }
+
         } catch (err) {
             // TODO: Do something with the error
-        }
-
-
-        if (flags["as-genesis"]) {
-            // TODO: Here the stuff to
-            //       * create specs for forked chain
-            //       * output spec somewhere
-        }
-
-        if (flags["output"]) {
-            // TODO: Write stuff to a file here, correctly as a json
-            //       * define json format
         }
     }
 }
 
-export async function transform(fromApi: ApiPromise, toApi: ApiPromise,  storageItems: Array<StorageKey>, atFrom: Hash, atTo: Hash): Promise<Map<string, Map<string, Array<StorageItem>>>>   {
+export async function transform(fromApi: ApiPromise, toApi: ApiPromise,  storageItems: Array<StorageElement>, atFrom: Hash, atTo: Hash): Promise<Map<string, Map<string, Array<StorageItem>>>>   {
     let forkData = Array.from(await fork(fromApi, storageItems, atFrom));
 
     let state: Map<string, Map<string, Array<StorageItem>>> = new Map();
@@ -201,6 +229,7 @@ async function transformProxyProxies(fromApi: ApiPromise, toApi: ApiPromise, com
         }
 
         let proxyType = toApi.createType("ProxyType", oldElement[1]);
+
         let delay = toApi.createType("BlockNumber", 0);
 
         let proxyDef = toApi.createType("ProxyDefinition",
@@ -212,7 +241,9 @@ async function transformProxyProxies(fromApi: ApiPromise, toApi: ApiPromise, com
 
         proxies.push(proxyDef);
     }
+
     let deposit = toApi.createType("Balance", oldProxyInfo[1]);
+
     // @ts-ignore, see https://github.com/polkadot-js/api/issues/3746
     let newProxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)',
     [
@@ -237,18 +268,13 @@ async function transformProxyProxies(fromApi: ApiPromise, toApi: ApiPromise, com
     if (balance.reserved.toBigInt() < (BigInt(proxies.length) * perProxy.toBigInt()) + base.toBigInt()) {
         let amount = deposit.toBigInt() - (perProxy.toBigInt() + base.toBigInt());
         reserve = toApi.createType("Balance", amount);
-        console.log("Anonymous detected. Reserving: " + reserve.toHuman() + " CINC is: " + CINCisDelegate);
     } else if (CINCisDelegate) {
         let amount = deposit.toBigInt() - (perProxy.toBigInt() + base.toBigInt());
         reserve = toApi.createType("Balance", amount);
-        console.log("Anonymous detected. Reserving: " + reserve.toHuman() + " CINC is: " + CINCisDelegate);
     } else {
         reserve = toApi.createType("Balance", deposit);
-        console.log("Non-Anonymous detected. Reserving: " + reserve.toHuman() + " CINC is: " + CINCisDelegate);
-        console.log("Balance of this proxy is: " + balance.free.toHuman() + " " + balance.reserved.toHuman());
     }
 
-    console.log("----------------------------")
     return new StorageMapValue(newProxyInfo.toU8a(), completeKey, reserve);
 }
 
@@ -322,9 +348,7 @@ async function transformBalancesTotalIssuance(fromApi: ApiPromise, toApi: ApiPro
 async function transformVesting(fromApi: ApiPromise, toApi: ApiPromise, keyValues: Array<[StorageKey, number[] | Uint8Array]>, atFrom: Hash, atTo: Hash):  Promise<Map<string, Array<StorageItem>>> {
     let state: Map<string, Array<StorageItem>> = new Map();
     const atFromAsNumber = (await fromApi.rpc.chain.getBlock(atFrom)).block.header.number.toBigInt();
-
-    // TODO: Actually use it here after tests
-    const atToAsNumber = BigInt(0);//(await toApi.rpc.chain.getBlock(atTo)).block.header.number.toBigInt();
+    const atToAsNumber = (await toApi.rpc.chain.getBlock(atTo)).block.header.number.toBigInt();
 
 
     for(let [patriciaKey, value] of keyValues) {
@@ -429,67 +453,40 @@ export class StorageDoubleMapValue extends StorageItem {
 }
 
 export async function test_run() {
-    const wsProviderFrom = new WsProvider("wss://fullnode.centrifuge.io");
+    const wsProviderFrom = new WsProvider("wss://fullnode-archive.centrifuge.io");
     const fromApi = await ApiPromise.create({
-        provider: wsProviderFrom
+        provider: wsProviderFrom,
+        types: {
+            ProxyType: {
+                _enum: ['Any', 'NonTransfer', 'Governance', 'Staking', 'Vesting']
+            }
+        }
     });
 
-    const wsProviderTo = new WsProvider("wss://fullnode-collator.charcoal.centrifuge.io");
+    const wsProviderTo = new WsProvider("ws://127.0.0.1:9946");
+    //const wsProviderTo = new WsProvider("wss://fullnode-collator.charcoal.centrifuge.io");
     const toApi = await ApiPromise.create({
-        provider: wsProviderTo
+        provider: wsProviderTo,
+        types: {
+            ProxyType: {
+                _enum: ['Any', 'NonTransfer', 'Governance', '_Staking', 'NonProxy']
+            }
+        }
     });
 
-
-    let storageItems: Array<string> = [
-        //xxhashAsHex('Vesting', 128)
-        xxhashAsHex('Proxy', 128)
-    ];
-
-    //storageItems.push(...DefaultStorage);
+    let storageItems = new Array();
+    storageItems.push(...getDefaultStorage());
 
     const metadataFrom = await fromApi.rpc.state.getMetadata();
     const metadataTo = await fromApi.rpc.state.getMetadata();
 
-    // Check if module is available
-    // Iteration is death, but we do not care here...
-    for (let key of storageItems) {
-        let availableFrom = false;
-        let availableTo = false;
 
-        metadataFrom.asLatest.modules.forEach((module) => {
-            if (module.storage.isSome) {
-                if (key.startsWith(xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
-                    availableFrom = true
-                }
-            }
-        });
+    const lastFromHdr = await fromApi.rpc.chain.getHeader();
+    let at = lastFromHdr.hash;
+    const lastToHdr = await toApi.rpc.chain.getHeader();
+    let to = lastToHdr.hash;
 
-        metadataTo.asLatest.modules.forEach((module) => {
-            if (module.storage.isSome) {
-                if (key.startsWith(xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
-                    availableTo = true
-                }
-            }
-        });
-
-        if (!availableFrom || !availableTo) {
-            console.log("Storage with key " + key + " is not available")
-            storageItems.filter((val) => key != val)
-        }
-    }
-
-
-    const lastHdr = await fromApi.rpc.chain.getHeader();
-    let at = lastHdr.hash;
-    let to = toApi.createType("Hash", 0); // TODO: This shall represent the first block. It is NOT used currently further down the road
-
-    let keyItems = [];
-
-    for (const stringKey of storageItems) {
-        keyItems.push(toApi.createType("StorageKey", stringKey));
-    }
-
-    let migrationData = await transform(fromApi, toApi, keyItems, at, to);
+    let migrationData = await transform(fromApi, toApi, storageItems, at, to);
 
     fromApi.disconnect();
     toApi.disconnect();

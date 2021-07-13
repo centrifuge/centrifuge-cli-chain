@@ -1,4 +1,19 @@
 "use strict";
+var __extends = (this && this.__extends) || (function () {
+    var extendStatics = function (d, b) {
+        extendStatics = Object.setPrototypeOf ||
+            ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
+            function (d, b) { for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p]; };
+        return extendStatics(d, b);
+    };
+    return function (d, b) {
+        if (typeof b !== "function" && b !== null)
+            throw new TypeError("Class extends value " + String(b) + " is not a constructor or null");
+        extendStatics(d, b);
+        function __() { this.constructor = d; }
+        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -36,12 +51,84 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Dispatcher = exports.toByteArray = exports.toHexString = exports.insertOrNewMap = exports.DefaultStorage = void 0;
+exports.StorageItemElement = exports.PalletElement = exports.StorageElement = exports.Dispatcher = exports.toByteArray = exports.toHexString = exports.insertOrNewMap = exports.parseModuleInput = exports.checkAvailability = exports.getDefaultStorage = void 0;
 var util_crypto_1 = require("@polkadot/util-crypto");
-exports.DefaultStorage = [
-    util_crypto_1.xxhashAsHex("System", 128) + util_crypto_1.xxhashAsHex("Account", 128).slice(2),
-    util_crypto_1.xxhashAsHex("Balances", 128),
-];
+function getDefaultStorage() {
+    return [
+        parseModuleInput("Balances.TotalIssuance"),
+        parseModuleInput("System.Account"),
+        parseModuleInput("Vesting.Vesting"),
+        parseModuleInput("Proxy.Proxies"),
+    ];
+}
+exports.getDefaultStorage = getDefaultStorage;
+function checkAvailability(availableFromModules, availableToModules, wanted) {
+    return __awaiter(this, void 0, void 0, function () {
+        var _loop_1, _i, wanted_1, storage, state_1;
+        return __generator(this, function (_a) {
+            _loop_1 = function (storage) {
+                var availableFrom = false;
+                var availableTo = false;
+                availableFromModules.forEach(function (module) {
+                    if (module.storage.isSome) {
+                        if (storage.key.startsWith(util_crypto_1.xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
+                            if (storage instanceof StorageItemElement) {
+                                for (var _i = 0, _a = module.storage.unwrap().items; _i < _a.length; _i++) {
+                                    var items = _a[_i];
+                                    availableFrom = storage.itemHash === util_crypto_1.xxhashAsHex(items.name.toString(), 128);
+                                }
+                            }
+                            else {
+                                availableFrom = true;
+                            }
+                        }
+                    }
+                });
+                availableToModules.forEach(function (module) {
+                    if (module.storage.isSome) {
+                        if (storage.key.startsWith(util_crypto_1.xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
+                            if (storage instanceof StorageItemElement) {
+                                for (var _i = 0, _a = module.storage.unwrap().items; _i < _a.length; _i++) {
+                                    var items = _a[_i];
+                                    availableTo = storage.itemHash === util_crypto_1.xxhashAsHex(items.name.toString(), 128);
+                                }
+                            }
+                            else {
+                                availableTo = true;
+                            }
+                        }
+                    }
+                });
+                if (!availableFrom || !availableTo) {
+                    return { value: false };
+                }
+            };
+            // Check if module is available
+            // Iteration is death, but we do not care here...
+            for (_i = 0, wanted_1 = wanted; _i < wanted_1.length; _i++) {
+                storage = wanted_1[_i];
+                state_1 = _loop_1(storage);
+                if (typeof state_1 === "object")
+                    return [2 /*return*/, state_1.value];
+            }
+            return [2 /*return*/, true];
+        });
+    });
+}
+exports.checkAvailability = checkAvailability;
+function parseModuleInput(input) {
+    var parsed = input.split(".").filter(function (element, index) {
+        return index < 2;
+    });
+    var elem;
+    if (parsed.length === 1) {
+        return new PalletElement(parsed[0]);
+    }
+    else {
+        return new StorageItemElement(parsed[0], parsed[1]);
+    }
+}
+exports.parseModuleInput = parseModuleInput;
 function insertOrNewMap(map, key, item) {
     return __awaiter(this, void 0, void 0, function () {
         var itemsArray, itemsArray;
@@ -177,13 +264,13 @@ var Dispatcher = /** @class */ (function () {
     };
     Dispatcher.prototype.dispatchInternal = function (xts) {
         return __awaiter(this, void 0, void 0, function () {
-            var counter, _loop_1, this_1, _i, xts_2, extrinsic;
+            var counter, _loop_2, this_1, _i, xts_2, extrinsic;
             var _this = this;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
                         counter = 0;
-                        _loop_1 = function (extrinsic) {
+                        _loop_2 = function (extrinsic) {
                             var unsub;
                             return __generator(this, function (_b) {
                                 switch (_b.label) {
@@ -241,7 +328,7 @@ var Dispatcher = /** @class */ (function () {
                     case 1:
                         if (!(_i < xts_2.length)) return [3 /*break*/, 4];
                         extrinsic = xts_2[_i];
-                        return [5 /*yield**/, _loop_1(extrinsic)];
+                        return [5 /*yield**/, _loop_2(extrinsic)];
                     case 2:
                         _a.sent();
                         _a.label = 3;
@@ -284,6 +371,9 @@ var Dispatcher = /** @class */ (function () {
                                 switch (_a.label) {
                                     case 0:
                                         extrinsic = xts.shift();
+                                        if (extrinsic === undefined) {
+                                            return [2 /*return*/];
+                                        }
                                         _a.label = 1;
                                     case 1:
                                         if (!(this.running >= this.maxConcurrent)) return [3 /*break*/, 3];
@@ -373,13 +463,13 @@ var Dispatcher = /** @class */ (function () {
     };
     Dispatcher.prototype.sudoDispatch = function (xts) {
         return __awaiter(this, void 0, void 0, function () {
-            var counter, _loop_2, this_2, _i, xts_3, extrinsic;
+            var counter, _loop_3, this_2, _i, xts_3, extrinsic;
             var _this = this;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
                         counter = 0;
-                        _loop_2 = function (extrinsic) {
+                        _loop_3 = function (extrinsic) {
                             var activeNonce, unsub;
                             return __generator(this, function (_b) {
                                 switch (_b.label) {
@@ -450,7 +540,7 @@ var Dispatcher = /** @class */ (function () {
                     case 1:
                         if (!(_i < xts_3.length)) return [3 /*break*/, 4];
                         extrinsic = xts_3[_i];
-                        return [5 /*yield**/, _loop_2(extrinsic)];
+                        return [5 /*yield**/, _loop_3(extrinsic)];
                     case 2:
                         _a.sent();
                         _a.label = 3;
@@ -520,4 +610,39 @@ var Dispatcher = /** @class */ (function () {
     return Dispatcher;
 }());
 exports.Dispatcher = Dispatcher;
+var StorageElement = /** @class */ (function () {
+    function StorageElement(key) {
+        this.key = key;
+    }
+    return StorageElement;
+}());
+exports.StorageElement = StorageElement;
+var PalletElement = /** @class */ (function (_super) {
+    __extends(PalletElement, _super);
+    function PalletElement(pallet) {
+        var _this = this;
+        var key = util_crypto_1.xxhashAsHex(pallet, 128);
+        _this = _super.call(this, key) || this;
+        _this.pallet = pallet;
+        _this.palletHash = util_crypto_1.xxhashAsHex(pallet, 128);
+        return _this;
+    }
+    return PalletElement;
+}(StorageElement));
+exports.PalletElement = PalletElement;
+var StorageItemElement = /** @class */ (function (_super) {
+    __extends(StorageItemElement, _super);
+    function StorageItemElement(pallet, item) {
+        var _this = this;
+        var key = util_crypto_1.xxhashAsHex(pallet, 128) + util_crypto_1.xxhashAsHex(item, 128).slice(2);
+        _this = _super.call(this, key) || this;
+        _this.pallet = pallet;
+        _this.palletHash = util_crypto_1.xxhashAsHex(pallet, 128);
+        _this.item = item;
+        _this.itemHash = util_crypto_1.xxhashAsHex(item, 128);
+        return _this;
+    }
+    return StorageItemElement;
+}(StorageElement));
+exports.StorageItemElement = StorageItemElement;
 //# sourceMappingURL=common.js.map

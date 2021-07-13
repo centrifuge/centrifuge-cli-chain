@@ -5,7 +5,7 @@ import {StorageKey} from "@polkadot/types";
 import { xxhashAsHex} from "@polkadot/util-crypto";
 import {Hash } from "@polkadot/types/interfaces";
 
-import { DefaultStorage } from "../common/common";
+import {checkAvailability, getDefaultStorage, parseModuleInput, StorageElement} from "../common/common";
 
 export default class ForkCommand extends Command {
     api: ApiPromise;
@@ -53,74 +53,63 @@ export default class ForkCommand extends Command {
 
         this.api = api;
 
-        let storageItems = flags["modules"];
-
-        // Transfrom modules into correct hashes
-        storageItems.forEach((item) => {
-
+        // Transform modules input
+        let storageItems = flags["modules"].map((value, index) => {
+            return parseModuleInput(value);
         });
 
         if (!flags["no-default"]) {
-            storageItems.push(...DefaultStorage);
+            storageItems.push(...getDefaultStorage());
         }
 
-        const metadata = await api.rpc.state.getMetadata();
-        const modules = metadata.asLatest.modules;
 
-        // Check if module is available
-        // Iteration is death, but we do not care here...
-        for (let key of storageItems) {
-            let available = false;
-            metadata.asLatest.modules.forEach((module) => {
-                if (module.storage.isSome) {
-                    if (key.startsWith(xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
-                        available = true
-                    }
-                }
-            });
+        const metadataFrom = await this.api.rpc.state.getMetadata();
 
-            if (!available) {
-                console.log("Storage with key " + key +" is not available")
-                storageItems.filter((val) => key != val)
-            }
+        if (!await checkAvailability(metadataFrom.asLatest.modules, metadataFrom.asLatest.modules, storageItems)) {
+            // TODO: Log error and abort
         }
 
 
         let at: Hash;
-
         if (flags["at-block"] == '-1') {
-            const lastHdr = await api.rpc.chain.getHeader();
+            const lastHdr = await this.api.rpc.chain.getHeader();
             at = lastHdr.hash;
         } else {
-            at = api.createType("Hash", flags["at-block"]);
+            let bn = parseInt(flags['from-block']);
+            if (bn !== undefined) {
+                at = await this.api.rpc.chain.getBlockHash(bn);
+            } else {
+                // TODO: Log error and abort
+            }
         }
 
-        //let state = await fork(api, storageItems, at);
+        try {
+            let state = await fork(api, storageItems, at);
 
 
-        if (flags["as-genesis"]) {
-            // TODO: Here the stuff to
-            //       * create specs for forked chain
-            //       * output spec somewhere
+            if (flags["as-genesis"]) {
+                // TODO: Here the stuff to
+                //       * create specs for forked chain
+                //       * output spec somewhere
+            }
+
+            if (flags["output"]) {
+                // TODO: Write stuff to a file here, correctly as a json
+                //       * define json format
+            }
+        } catch (err) {
+            // TODO: Log error and abort
         }
-
-        if (flags["output"]) {
-            // TODO: Write stuff to a file here, correctly as a json
-            //       * define json format
-        }
-
-        //console.log(JSON.stringify(state));
-
     }
 }
 
-export async function fork(api: ApiPromise, storageItems: Array<StorageKey>, at: Hash): Promise<Map<string, Array<[ StorageKey, Uint8Array | number[]]>>>   {
+export async function fork(api: ApiPromise, storageItems: Array<StorageElement>, at: Hash): Promise<Map<string, Array<[ StorageKey, Uint8Array | number[]]>>>   {
     let state: Map<string, Array<[ StorageKey, Uint8Array | number[]]>> = new Map();
 
-    for (const key of storageItems) {
-        let data = await fetchState(api, at, key);
+    for (const element of storageItems) {
+        let data = await fetchState(api, at, api.createType("StorageKey", element.key));
 
-        state.set(key.toHex(), data);
+        state.set(element.key, data);
     }
 
     return state;
@@ -130,6 +119,17 @@ async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<A
     console.log("Fetching storage for prefix: " + key.toHuman());
 
     let keyArray = await api.rpc.state.getKeysPaged(key, 1000);
+
+    // getKeysPaged does not work for StorageValues, lets try if it is one
+    if (keyArray === undefined || keyArray.length === 0) {
+        let value = await api.rpc.state.getStorage(key);
+
+        if (value !== undefined) {
+            // @ts-ignore
+            return [[key, value.toU8a(true)]]
+        }
+    }
+
     let fetched = false;
     let accumulate = keyArray.length;
 
@@ -154,8 +154,6 @@ async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<A
     accumulate = 0;
     for (const storageKey of keyArray) {
         let storageValue = await api.rpc.state.getStorage(storageKey);
-        // TODO: Not sure, why the api does solely provide an unknown here and how we can tell the compiler
-        //       that it will have an toU8a method.
         // @ts-ignore
         pairs.push([storageKey, storageValue.toU8a(true)]);
 
@@ -169,48 +167,22 @@ async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<A
 }
 
 export async function test_run() {
-    const wsProvider = new WsProvider("wss://fullnode.centrifuge.io");
-    const api = await ApiPromise.create({
-        provider: wsProvider
+    const wsProviderFrom = new WsProvider("wss://fullnode-archive.centrifuge.io");
+    const fromApi = await ApiPromise.create({
+        provider: wsProviderFrom,
+        types: {
+            ProxyType: {
+                _enum: ['Any', 'NonTransfer', 'Governance', 'Staking', 'Vesting']
+            }
+        }
     });
 
 
-    let storageItems: Array<string> = [
-        //xxhashAsHex('Vesting', 128)
-    ];
+    let storageItems = new Array();
+    storageItems.push(...getDefaultStorage());
 
-    storageItems.push(...DefaultStorage);
+    const lastFromHdr = await fromApi.rpc.chain.getHeader();
+    let at = lastFromHdr.hash;
 
-    const metadata = await api.rpc.state.getMetadata();
-
-    // Check if module is available
-    // Iteration is death, but we do not care here...
-    for (let key of storageItems) {
-        let available = false;
-        metadata.asLatest.modules.forEach((module) => {
-            if (module.storage.isSome) {
-                if (key.startsWith(xxhashAsHex(module.storage.unwrap().prefix.toString(), 128))) {
-                    available = true
-                }
-            }
-        });
-
-        if (!available) {
-            console.log("Storage with key " + key +" is not available")
-            storageItems.filter((val) => key != val)
-        }
-    }
-
-
-    const lastHdr = await api.rpc.chain.getHeader();
-    let at = lastHdr.hash;
-
-    let keyItems = [];
-
-    for (const stringKey of storageItems) {
-        keyItems.push(api.createType("StorageKey", stringKey));
-    }
-
-    let state: Map<string, Array<[ StorageKey, Uint8Array | number[]]>> = await fork(api, keyItems, at);
-
+    let state: Map<string, Array<[ StorageKey, Uint8Array | number[]]>> = await fork(fromApi, storageItems, at);
 }
