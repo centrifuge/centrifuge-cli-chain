@@ -166,11 +166,6 @@ var TransformCommand = /** @class */ (function (_super) {
                         return [4 /*yield*/, transform(this.fromApi, this.toApi, storageItems, from, to)];
                     case 17:
                         state = _a.sent();
-                        if (flags["as-genesis"]) {
-                            // TODO: Here the stuff to
-                            //       * create specs for forked chain
-                            //       * output spec somewhere
-                        }
                         if (flags["output"]) {
                             // TODO: Write stuff to a file here, correctly as a json
                             //       * define json format
@@ -196,9 +191,14 @@ var TransformCommand = /** @class */ (function (_super) {
             description: 'the networks ws-endpoint the state shall be ported to',
             required: true,
         }),
-        'at-block': command_1.flags.string({
+        'from-block': command_1.flags.string({
             char: 'b',
-            description: 'specify at which block to take the state from the chain. Input must be a hash.',
+            description: 'specify at which block to take the state from the chain. Input must be a block number.',
+            default: '-1',
+        }),
+        'to-block': command_1.flags.string({
+            char: 'b',
+            description: 'specify at which block to insert the state from the chain. Input must be a block number.',
             default: '-1',
         }),
         'output': command_1.flags.boolean({
@@ -210,12 +210,8 @@ var TransformCommand = /** @class */ (function (_super) {
             multiple: true,
         }),
         'no-default': command_1.flags.boolean({
-            description: 'Do not fork the default modules. Namely: System, Balances',
+            description: 'Do not transform the default storage.',
         }),
-        'full-chain': command_1.flags.boolean({
-            description: 'Fork all modules storages',
-            exclusive: ['no-default', 'modules'],
-        })
     };
     return TransformCommand;
 }(command_1.default));

@@ -68,7 +68,11 @@ export default class MigrateCommand extends Command {
         }),
         'no-default': flags.boolean({
             description: 'Do not migrate the default modules. Namely: System, Balances, Proxy, Vesting',
+        }),
+        'verify': flags.boolean({
+            description: 'Verifies the migration after running it.',
         })
+
     };
 
     async run() {
@@ -170,7 +174,24 @@ export default class MigrateCommand extends Command {
                 }
             });
 
-            // TODO: Log results
+            if (flags["verify"]) {
+                // We need the latest block, as we want the "current" state
+                //
+                // Note: This might break verification, if other actors can change the state between the migration and
+                //       this block.
+                const lastHdr = await this.toApi.rpc.chain.getHeader();
+                const newTo = lastHdr.hash;
+                let failedPairs = await verifyMigration(toApi, fromApi, storageItems, newTo, from);
+
+                if (failedPairs.length !== 0) {
+                    console.log("The following pairs failed to be verified: ");
+                    console.log(failedPairs);
+                }
+            }
+
+            console.log("Logging extrinsic block hashes and indexes of the migration: ");
+            console.log(results);
+
             fromApi.disconnect();
             toApi.disconnect();
         } catch (err) {
@@ -261,6 +282,221 @@ export default class MigrateCommand extends Command {
 
 }
 
+export async function verifyMigration(toApi: ApiPromise, fromApi: ApiPromise, storageItems: Array<StorageElement>, atTo: Hash, atFrom: Hash): Promise<Array<[StorageKey, number[] | Uint8Array]>> {
+    let forkDataOld = await fork(fromApi, storageItems, atFrom);
+    let forkDataNew = await fork(toApi, storageItems, atTo);
+
+    let fromAsNum = (await fromApi.rpc.chain.getBlock(atFrom)).block.header.number.toBigInt();
+    let toAsNum = (await toApi.rpc.chain.getBlock(atTo)).block.header.number.toBigInt();
+
+    let failedAcc = new Array();
+
+    // create a good counter
+    let itemsToCheck = 0;
+    for (const [_one, data] of Array.from(forkDataOld)) {
+        itemsToCheck += data.length;
+    }
+    console.log("Starting verification of " + itemsToCheck + " migrated storage keys.");
+
+    process.stdout.write("    Verifying:    0/" + itemsToCheck + "\r");
+    for (const [key, oldData ] of Array.from(forkDataOld)) {
+
+        let newData = forkDataNew.get(key);
+
+        if (oldData === undefined){
+            failedAcc.push(...oldData);
+            console.log("Some data from old could not be found in the new data...");
+        } else {
+            if (key === xxhashAsHex("System", 128) + xxhashAsHex("Account", 128).slice(2)) {
+                let failed = await verifySystemAccount(oldData, fromApi, newData, toApi);
+                if(failed.length === 0) {
+                    failedAcc.push(...failed);
+                }
+            } else if (key === xxhashAsHex("Balances", 128) + xxhashAsHex("TotalIssuance", 128).slice(2)){
+                let failed = await verifyBalanceTotalIssuance(oldData, fromApi, newData, toApi);
+                if(failed.length === 0) {
+                    failedAcc.push(...failed);
+                }
+            } else if (key === xxhashAsHex("Vesting", 128) + xxhashAsHex("Vesting", 128).slice(2)){
+                let failed = await verifyVestingVesting(oldData, fromApi, newData, toApi, fromAsNum, toAsNum);
+                if(failed.length === 0) {
+                    failedAcc.push(...failed);
+                }
+            } else if (key === xxhashAsHex("Proxy", 128) + xxhashAsHex("Proxies", 128).slice(2)){
+                let failed = await verifyProxyProxies(oldData, fromApi, newData, toApi);
+                if(failed.length === 0) {
+                    failedAcc.push(...failed);
+                }
+            } else {
+                failedAcc.push(...oldData);
+                console.log("Some data from old could not be verified here...");
+            }
+        }
+    }
+
+    return failedAcc;
+}
+
+async function verifySystemAccount(oldData: Array<[StorageKey, number[] | Uint8Array]>, oldApi: ApiPromise, newData: Array<[StorageKey, number[] | Uint8Array]>, newApi: ApiPromise): Promise<Array<[StorageKey, number[] | Uint8Array]>> {
+    let failed = new Array();
+
+    let newDataMap = newData.reduce(function (map, obj) {
+        map[obj[0].toHex()] = obj[1];
+        return map;
+    }, new Map());
+
+    let checked = 0;
+    for(let [key, value] of oldData) {
+        process.stdout.write("    Verifying:    "+ checked +"/ \r");
+
+        let oldAccount = oldApi.createType('AccountInfo', value);
+
+        let newScale = newDataMap.get(key.toHex());
+        if (newScale !== undefined) {
+            let newAccount = oldApi.createType('AccountInfo', newScale.get(key.toHex()[1]))
+
+            if (oldAccount.data.free.toBigInt() + oldAccount.data.reserved.toBigInt() !== newAccount.data.free.toBigInt()) {
+                failed.push([key, value]);
+            }
+
+        } else {
+            failed.push([key, value]);
+        }
+
+        checked += 1;
+    }
+
+    return failed;
+}
+
+async function verifyBalanceTotalIssuance(oldData: Array<[StorageKey, number[] | Uint8Array]>, oldApi: ApiPromise, newData: Array<[StorageKey, number[] | Uint8Array]>, newApi: ApiPromise): Promise<Array<[StorageKey, number[] | Uint8Array]>> {
+    let failed = new Array();
+
+    let newDataMap = newData.reduce(function (map, obj) {
+        map[obj[0].toHex()] = obj[1];
+        return map;
+    }, new Map());
+
+    let checked = 0;
+    for(let [key, value] of oldData) {
+        process.stdout.write("    Verifying:    "+ checked +"/ \r");
+
+        let oldIssuance = oldApi.createType('Balance', value);
+
+        let newScale = newDataMap.get(key.toHex());
+        if (newScale !== undefined) {
+            let newIssuance = oldApi.createType('Balance', newScale.get(key.toHex()[1]))
+
+            if (oldIssuance.toBigInt() > newIssuance.toBigInt()) {
+                failed.push([key, value]);
+            }
+
+        } else {
+            failed.push([key, value]);
+        }
+
+        checked += 1;
+    }
+
+    return failed;
+}
+
+async function verifyProxyProxies(oldData: Array<[StorageKey, number[] | Uint8Array]>, oldApi: ApiPromise, newData: Array<[StorageKey, number[] | Uint8Array]>, newApi: ApiPromise): Promise<Array<[StorageKey, number[] | Uint8Array]>> {
+    let failed = new Array();
+
+    let newDataMap = newData.reduce(function (map, obj) {
+        map[obj[0].toHex()] = obj[1];
+        return map;
+    }, new Map());
+
+    let checked = 0;
+    for(let [key, value] of oldData) {
+        process.stdout.write("    Verifying:    "+ checked +"/ \r");
+
+        // @ts-ignore
+        let oldProxyInfo = oldApi.createType('(Vec<(AccountId, ProxyType)>, Balance)', value);
+
+        let newScale = newDataMap.get(key.toHex());
+        if (newScale !== undefined) {
+            // @ts-ignore
+            let newProxyInfo = newApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', newScale.get(key.toHex()[1]));
+
+            if (oldProxyInfo[0][0].length === newProxyInfo[0][0].length
+                && oldProxyInfo[0][1].toBigInt() === newProxyInfo[0][1].toBigInt()
+                && oldProxyInfo[0][0][1].toBigInt() === newProxyInfo[0][0]["proxyType"].toBigInt()
+            ) {
+                // Now also check each delegate of this proxy entry
+                for(const oldDelegate of oldProxyInfo[0][0]) {
+                    let found = false;
+                    let oldAccount = oldDelegate[0].toHex();
+
+                    for (const newDelegate of newProxyInfo[0][0]) {
+                        let newAccount = newDelegate["delegate"].toHex();
+                        if (oldAccount === newAccount) {
+                            found = true;
+                        }
+                    }
+
+                    if (!found){
+                        failed.push([key, value]);
+                    }
+                }
+            } else {
+                failed.push([key, value]);
+            }
+        } else {
+            failed.push([key, value]);
+        }
+
+        checked += 1;
+    }
+
+    return failed;
+}
+
+async function verifyVestingVesting(oldData: Array<[StorageKey, number[] | Uint8Array]>, oldApi: ApiPromise, newData: Array<[StorageKey, number[] | Uint8Array]>, newApi: ApiPromise, atFrom: bigint, atTo: bigint): Promise<Array<[StorageKey, number[] | Uint8Array]>> {
+    let failed = new Array();
+
+    let newDataMap = newData.reduce(function (map, obj) {
+        map[obj[0].toHex()] = obj[1];
+        return map;
+    }, new Map());
+
+    let checked = 0;
+    for(let [key, value] of oldData) {
+        process.stdout.write("    Verifying:    "+ checked +"/ \r");
+
+        let oldVestingInfo = oldApi.createType('VestingInfo', value);
+
+        const blockPeriodOldVesting = (oldVestingInfo.locked.toBigInt() / oldVestingInfo.perBlock.toBigInt());
+        const blocksPassedSinceVestingStart = (atFrom - oldVestingInfo.startingBlock.toBigInt());
+        const remainingBlocksVestingOld = blockPeriodOldVesting - blocksPassedSinceVestingStart;
+
+        if (oldVestingInfo.startingBlock.toBigInt() - atFrom >= 0) {
+            // Vesting has passed, the chain will resolve this directly upon our inserts.
+        } else {
+            let newScale = newDataMap.get(key.toHex());
+            if (newScale !== undefined) {
+                let newVestingInfo = oldApi.createType('VestingInfo', newScale.get(key.toHex()[1]))
+
+                const blockPeriodNewVesting = newVestingInfo.locked.toBigInt() / newVestingInfo.perBlock.toBigInt();
+                const blocksPassedSinceVestingStartNew = (atTo - newVestingInfo.startingBlock.toBigInt());
+                const remainingBlocksVestingNew = blockPeriodNewVesting - blocksPassedSinceVestingStart;
+
+                if (remainingBlocksVestingOld !== (remainingBlocksVestingNew * BigInt(2))) {
+                     failed.push([key, value]);
+                }
+
+            } else {
+                failed.push([key, value]);
+            }
+        }
+
+        checked += 1;
+    }
+
+    return failed;
+}
 
 
 export async function prepareMigrate(fromApi: ApiPromise, toApi: ApiPromise, storageItems: Array<StorageElement>, at: Hash, to: Hash): Promise<Map<string, Map<string, Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>>>> {
@@ -528,7 +764,7 @@ async function prepareVestingVestingInfo(toApi: ApiPromise, values: StorageItem[
 
 
 export async function test_run() {
-    const wsProviderFrom = new WsProvider("wss://fullnode-archive.centrifuge.io");
+    const wsProviderFrom = new WsProvider("wss://fullnode-archive.amber.centrifuge.io");
     const fromApi = await ApiPromise.create({
         provider: wsProviderFrom,
         types: {
@@ -577,6 +813,20 @@ export async function test_run() {
             console.log(xt.toJSON())
         }
     });
+
+    const lastHdr = await this.toApi.rpc.chain.getHeader();
+    const newTo = lastHdr.hash;
+    let verification = await verifyMigration(toApi, fromApi, storageItems, newTo, at);
+
+    if(verification.length === 0) {
+        console.log("Migration was successful.");
+    } else {
+        console.log("Some failed. Data comes here: ")
+
+        for (let failed of verification) {
+            console.log(JSON.stringify(failed));
+        }
+    }
 
     fromApi.disconnect();
     toApi.disconnect();

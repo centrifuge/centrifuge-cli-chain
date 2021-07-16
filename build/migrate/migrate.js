@@ -51,7 +51,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.test_run = exports.migrate = exports.prepareMigrate = void 0;
+exports.test_run = exports.migrate = exports.prepareMigrate = exports.verifyMigration = void 0;
 // Here comes the oclif specific stuff
 var command_1 = require("@oclif/command");
 var api_1 = require("@polkadot/api");
@@ -60,6 +60,7 @@ var fs = require("fs");
 var readline = require("readline");
 var common_1 = require("../common/common");
 var transform_1 = require("../transform/transform");
+var fork_1 = require("../fork/fork");
 var AvailableMigrations = [
     common_1.parseModuleInput("Balances.TotalIssuance"),
     common_1.parseModuleInput("System.Account"),
@@ -73,7 +74,7 @@ var MigrateCommand = /** @class */ (function (_super) {
     }
     MigrateCommand.prototype.run = function () {
         return __awaiter(this, void 0, void 0, function () {
-            var flags, executor, wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, _i, storageItems_1, item, metadataFrom, metadataTo, from, lastHdr, bn, to, lastHdr, bn, err_1, migrationData, sequence, failed_1, results, err_2;
+            var flags, executor, wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, _i, storageItems_1, item, metadataFrom, metadataTo, from, lastHdr, bn, to, lastHdr, bn, err_1, migrationData, sequence, failed_1, results, lastHdr, newTo, failedPairs, err_2;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
@@ -167,7 +168,7 @@ var MigrateCommand = /** @class */ (function (_super) {
                         return [3 /*break*/, 16];
                     case 16: return [3 /*break*/, 17];
                     case 17:
-                        _a.trys.push([17, 21, , 22]);
+                        _a.trys.push([17, 24, , 25]);
                         return [4 /*yield*/, prepareMigrate(fromApi, toApi, storageItems, from, to)];
                     case 18:
                         migrationData = _a.sent();
@@ -185,14 +186,29 @@ var MigrateCommand = /** @class */ (function (_super) {
                             })];
                     case 20:
                         results = _a.sent();
-                        // TODO: Log results
+                        if (!flags["verify"]) return [3 /*break*/, 23];
+                        return [4 /*yield*/, this.toApi.rpc.chain.getHeader()];
+                    case 21:
+                        lastHdr = _a.sent();
+                        newTo = lastHdr.hash;
+                        return [4 /*yield*/, verifyMigration(toApi, fromApi, storageItems, newTo, from)];
+                    case 22:
+                        failedPairs = _a.sent();
+                        if (failedPairs.length !== 0) {
+                            console.log("The following pairs failed to be verified: ");
+                            console.log(failedPairs);
+                        }
+                        _a.label = 23;
+                    case 23:
+                        console.log("Logging extrinsic block hashes and indexes of the migration: ");
+                        console.log(results);
                         fromApi.disconnect();
                         toApi.disconnect();
-                        return [3 /*break*/, 22];
-                    case 21:
+                        return [3 /*break*/, 25];
+                    case 24:
                         err_2 = _a.sent();
-                        return [3 /*break*/, 22];
-                    case 22: return [2 /*return*/];
+                        return [3 /*break*/, 25];
+                    case 25: return [2 /*return*/];
                 }
             });
         });
@@ -332,11 +348,249 @@ var MigrateCommand = /** @class */ (function (_super) {
         }),
         'no-default': command_1.flags.boolean({
             description: 'Do not migrate the default modules. Namely: System, Balances, Proxy, Vesting',
+        }),
+        'verify': command_1.flags.boolean({
+            description: 'Verifies the migration after running it.',
         })
     };
     return MigrateCommand;
 }(command_1.default));
 exports.default = MigrateCommand;
+function verifyMigration(toApi, fromApi, storageItems, atTo, atFrom) {
+    return __awaiter(this, void 0, void 0, function () {
+        var forkDataOld, forkDataNew, fromAsNum, toAsNum, failedAcc, itemsToCheck, _i, _a, _b, _one, data, _c, _d, _e, key, oldData, newData, failed, failed, failed, failed;
+        return __generator(this, function (_f) {
+            switch (_f.label) {
+                case 0: return [4 /*yield*/, fork_1.fork(fromApi, storageItems, atFrom)];
+                case 1:
+                    forkDataOld = _f.sent();
+                    return [4 /*yield*/, fork_1.fork(toApi, storageItems, atTo)];
+                case 2:
+                    forkDataNew = _f.sent();
+                    return [4 /*yield*/, fromApi.rpc.chain.getBlock(atFrom)];
+                case 3:
+                    fromAsNum = (_f.sent()).block.header.number.toBigInt();
+                    return [4 /*yield*/, toApi.rpc.chain.getBlock(atTo)];
+                case 4:
+                    toAsNum = (_f.sent()).block.header.number.toBigInt();
+                    failedAcc = new Array();
+                    itemsToCheck = 0;
+                    for (_i = 0, _a = Array.from(forkDataOld); _i < _a.length; _i++) {
+                        _b = _a[_i], _one = _b[0], data = _b[1];
+                        itemsToCheck += data.length;
+                    }
+                    console.log("Starting verification of " + itemsToCheck + " migrated storage keys.");
+                    process.stdout.write("    Verifying:    0/" + itemsToCheck + "\r");
+                    _c = 0, _d = Array.from(forkDataOld);
+                    _f.label = 5;
+                case 5:
+                    if (!(_c < _d.length)) return [3 /*break*/, 16];
+                    _e = _d[_c], key = _e[0], oldData = _e[1];
+                    newData = forkDataNew.get(key);
+                    if (!(oldData === undefined)) return [3 /*break*/, 6];
+                    failedAcc.push.apply(failedAcc, oldData);
+                    console.log("Some data from old could not be found in the new data...");
+                    return [3 /*break*/, 15];
+                case 6:
+                    if (!(key === util_crypto_1.xxhashAsHex("System", 128) + util_crypto_1.xxhashAsHex("Account", 128).slice(2))) return [3 /*break*/, 8];
+                    return [4 /*yield*/, verifySystemAccount(oldData, fromApi, newData, toApi)];
+                case 7:
+                    failed = _f.sent();
+                    if (failed.length === 0) {
+                        failedAcc.push.apply(failedAcc, failed);
+                    }
+                    return [3 /*break*/, 15];
+                case 8:
+                    if (!(key === util_crypto_1.xxhashAsHex("Balances", 128) + util_crypto_1.xxhashAsHex("TotalIssuance", 128).slice(2))) return [3 /*break*/, 10];
+                    return [4 /*yield*/, verifyBalanceTotalIssuance(oldData, fromApi, newData, toApi)];
+                case 9:
+                    failed = _f.sent();
+                    if (failed.length === 0) {
+                        failedAcc.push.apply(failedAcc, failed);
+                    }
+                    return [3 /*break*/, 15];
+                case 10:
+                    if (!(key === util_crypto_1.xxhashAsHex("Vesting", 128) + util_crypto_1.xxhashAsHex("Vesting", 128).slice(2))) return [3 /*break*/, 12];
+                    return [4 /*yield*/, verifyVestingVesting(oldData, fromApi, newData, toApi, fromAsNum, toAsNum)];
+                case 11:
+                    failed = _f.sent();
+                    if (failed.length === 0) {
+                        failedAcc.push.apply(failedAcc, failed);
+                    }
+                    return [3 /*break*/, 15];
+                case 12:
+                    if (!(key === util_crypto_1.xxhashAsHex("Proxy", 128) + util_crypto_1.xxhashAsHex("Proxies", 128).slice(2))) return [3 /*break*/, 14];
+                    return [4 /*yield*/, verifyProxyProxies(oldData, fromApi, newData, toApi)];
+                case 13:
+                    failed = _f.sent();
+                    if (failed.length === 0) {
+                        failedAcc.push.apply(failedAcc, failed);
+                    }
+                    return [3 /*break*/, 15];
+                case 14:
+                    failedAcc.push.apply(failedAcc, oldData);
+                    console.log("Some data from old could not be verified here...");
+                    _f.label = 15;
+                case 15:
+                    _c++;
+                    return [3 /*break*/, 5];
+                case 16: return [2 /*return*/, failedAcc];
+            }
+        });
+    });
+}
+exports.verifyMigration = verifyMigration;
+function verifySystemAccount(oldData, oldApi, newData, newApi) {
+    return __awaiter(this, void 0, void 0, function () {
+        var failed, newDataMap, checked, _i, oldData_1, _a, key, value, oldAccount, newScale, newAccount;
+        return __generator(this, function (_b) {
+            failed = new Array();
+            newDataMap = newData.reduce(function (map, obj) {
+                map[obj[0].toHex()] = obj[1];
+                return map;
+            }, new Map());
+            checked = 0;
+            for (_i = 0, oldData_1 = oldData; _i < oldData_1.length; _i++) {
+                _a = oldData_1[_i], key = _a[0], value = _a[1];
+                process.stdout.write("    Verifying:    " + checked + "/ \r");
+                oldAccount = oldApi.createType('AccountInfo', value);
+                newScale = newDataMap.get(key.toHex());
+                if (newScale !== undefined) {
+                    newAccount = oldApi.createType('AccountInfo', newScale.get(key.toHex()[1]));
+                    if (oldAccount.data.free.toBigInt() + oldAccount.data.reserved.toBigInt() !== newAccount.data.free.toBigInt()) {
+                        failed.push([key, value]);
+                    }
+                }
+                else {
+                    failed.push([key, value]);
+                }
+                checked += 1;
+            }
+            return [2 /*return*/, failed];
+        });
+    });
+}
+function verifyBalanceTotalIssuance(oldData, oldApi, newData, newApi) {
+    return __awaiter(this, void 0, void 0, function () {
+        var failed, newDataMap, checked, _i, oldData_2, _a, key, value, oldIssuance, newScale, newIssuance;
+        return __generator(this, function (_b) {
+            failed = new Array();
+            newDataMap = newData.reduce(function (map, obj) {
+                map[obj[0].toHex()] = obj[1];
+                return map;
+            }, new Map());
+            checked = 0;
+            for (_i = 0, oldData_2 = oldData; _i < oldData_2.length; _i++) {
+                _a = oldData_2[_i], key = _a[0], value = _a[1];
+                process.stdout.write("    Verifying:    " + checked + "/ \r");
+                oldIssuance = oldApi.createType('Balance', value);
+                newScale = newDataMap.get(key.toHex());
+                if (newScale !== undefined) {
+                    newIssuance = oldApi.createType('Balance', newScale.get(key.toHex()[1]));
+                    if (oldIssuance.toBigInt() > newIssuance.toBigInt()) {
+                        failed.push([key, value]);
+                    }
+                }
+                else {
+                    failed.push([key, value]);
+                }
+                checked += 1;
+            }
+            return [2 /*return*/, failed];
+        });
+    });
+}
+function verifyProxyProxies(oldData, oldApi, newData, newApi) {
+    return __awaiter(this, void 0, void 0, function () {
+        var failed, newDataMap, checked, _i, oldData_3, _a, key, value, oldProxyInfo, newScale, newProxyInfo, _b, _c, oldDelegate, found, oldAccount, _d, _e, newDelegate, newAccount;
+        return __generator(this, function (_f) {
+            failed = new Array();
+            newDataMap = newData.reduce(function (map, obj) {
+                map[obj[0].toHex()] = obj[1];
+                return map;
+            }, new Map());
+            checked = 0;
+            for (_i = 0, oldData_3 = oldData; _i < oldData_3.length; _i++) {
+                _a = oldData_3[_i], key = _a[0], value = _a[1];
+                process.stdout.write("    Verifying:    " + checked + "/ \r");
+                oldProxyInfo = oldApi.createType('(Vec<(AccountId, ProxyType)>, Balance)', value);
+                newScale = newDataMap.get(key.toHex());
+                if (newScale !== undefined) {
+                    newProxyInfo = newApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', newScale.get(key.toHex()[1]));
+                    if (oldProxyInfo[0][0].length === newProxyInfo[0][0].length
+                        && oldProxyInfo[0][1].toBigInt() === newProxyInfo[0][1].toBigInt()
+                        && oldProxyInfo[0][0][1].toBigInt() === newProxyInfo[0][0]["proxyType"].toBigInt()) {
+                        // Now also check each delegate of this proxy entry
+                        for (_b = 0, _c = oldProxyInfo[0][0]; _b < _c.length; _b++) {
+                            oldDelegate = _c[_b];
+                            found = false;
+                            oldAccount = oldDelegate[0].toHex();
+                            for (_d = 0, _e = newProxyInfo[0][0]; _d < _e.length; _d++) {
+                                newDelegate = _e[_d];
+                                newAccount = newDelegate["delegate"].toHex();
+                                if (oldAccount === newAccount) {
+                                    found = true;
+                                }
+                            }
+                            if (!found) {
+                                failed.push([key, value]);
+                            }
+                        }
+                    }
+                    else {
+                        failed.push([key, value]);
+                    }
+                }
+                else {
+                    failed.push([key, value]);
+                }
+                checked += 1;
+            }
+            return [2 /*return*/, failed];
+        });
+    });
+}
+function verifyVestingVesting(oldData, oldApi, newData, newApi, atFrom, atTo) {
+    return __awaiter(this, void 0, void 0, function () {
+        var failed, newDataMap, checked, _i, oldData_4, _a, key, value, oldVestingInfo, blockPeriodOldVesting, blocksPassedSinceVestingStart, remainingBlocksVestingOld, newScale, newVestingInfo, blockPeriodNewVesting, blocksPassedSinceVestingStartNew, remainingBlocksVestingNew;
+        return __generator(this, function (_b) {
+            failed = new Array();
+            newDataMap = newData.reduce(function (map, obj) {
+                map[obj[0].toHex()] = obj[1];
+                return map;
+            }, new Map());
+            checked = 0;
+            for (_i = 0, oldData_4 = oldData; _i < oldData_4.length; _i++) {
+                _a = oldData_4[_i], key = _a[0], value = _a[1];
+                process.stdout.write("    Verifying:    " + checked + "/ \r");
+                oldVestingInfo = oldApi.createType('VestingInfo', value);
+                blockPeriodOldVesting = (oldVestingInfo.locked.toBigInt() / oldVestingInfo.perBlock.toBigInt());
+                blocksPassedSinceVestingStart = (atFrom - oldVestingInfo.startingBlock.toBigInt());
+                remainingBlocksVestingOld = blockPeriodOldVesting - blocksPassedSinceVestingStart;
+                if (oldVestingInfo.startingBlock.toBigInt() - atFrom >= 0) {
+                    // Vesting has passed, the chain will resolve this directly upon our inserts.
+                }
+                else {
+                    newScale = newDataMap.get(key.toHex());
+                    if (newScale !== undefined) {
+                        newVestingInfo = oldApi.createType('VestingInfo', newScale.get(key.toHex()[1]));
+                        blockPeriodNewVesting = newVestingInfo.locked.toBigInt() / newVestingInfo.perBlock.toBigInt();
+                        blocksPassedSinceVestingStartNew = (atTo - newVestingInfo.startingBlock.toBigInt());
+                        remainingBlocksVestingNew = blockPeriodNewVesting - blocksPassedSinceVestingStart;
+                        if (remainingBlocksVestingOld !== (remainingBlocksVestingNew * BigInt(2))) {
+                            failed.push([key, value]);
+                        }
+                    }
+                    else {
+                        failed.push([key, value]);
+                    }
+                }
+                checked += 1;
+            }
+            return [2 /*return*/, failed];
+        });
+    });
+}
 function prepareMigrate(fromApi, toApi, storageItems, at, to) {
     return __awaiter(this, void 0, void 0, function () {
         var transformedData, _a, _b, migrationXts, _i, transformedData_1, _c, prefix, keyValues, migratedPalletStorageItems, migratedPalletStorageItems, migratedPalletStorageItems, migratedPalletStorageItems;
@@ -712,11 +966,11 @@ function prepareVestingVestingInfo(toApi, values) {
 }
 function test_run() {
     return __awaiter(this, void 0, void 0, function () {
-        var wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadataFrom, metadataTo, lastFromHdr, at, lastToHdr, to, migrationData, sequence, keyring, alice, failed, results;
+        var wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadataFrom, metadataTo, lastFromHdr, at, lastToHdr, to, migrationData, sequence, keyring, alice, failed, results, lastHdr, newTo, verification, _i, verification_1, failed_2;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
-                    wsProviderFrom = new api_1.WsProvider("wss://fullnode-archive.centrifuge.io");
+                    wsProviderFrom = new api_1.WsProvider("wss://fullnode-archive.amber.centrifuge.io");
                     return [4 /*yield*/, api_1.ApiPromise.create({
                             provider: wsProviderFrom,
                             types: {
@@ -771,6 +1025,23 @@ function test_run() {
                         })];
                 case 8:
                     results = _a.sent();
+                    return [4 /*yield*/, this.toApi.rpc.chain.getHeader()];
+                case 9:
+                    lastHdr = _a.sent();
+                    newTo = lastHdr.hash;
+                    return [4 /*yield*/, verifyMigration(toApi, fromApi, storageItems, newTo, at)];
+                case 10:
+                    verification = _a.sent();
+                    if (verification.length === 0) {
+                        console.log("Migration was successful.");
+                    }
+                    else {
+                        console.log("Some failed. Data comes here: ");
+                        for (_i = 0, verification_1 = verification; _i < verification_1.length; _i++) {
+                            failed_2 = verification_1[_i];
+                            console.log(JSON.stringify(failed_2));
+                        }
+                    }
                     fromApi.disconnect();
                     toApi.disconnect();
                     return [2 /*return*/];

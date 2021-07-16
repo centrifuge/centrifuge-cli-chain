@@ -1,7 +1,7 @@
 import {xxhashAsHex} from "@polkadot/util-crypto";
 import {StorageItem} from "../transform/transform";
 import {ApiTypes, SubmittableExtrinsic} from "@polkadot/api/types";
-import {ApiPromise, SubmittableResult} from "@polkadot/api";
+import {ApiPromise, Keyring, SubmittableResult, WsProvider} from "@polkadot/api";
 import {Hash, ModuleMetadataLatest} from "@polkadot/types/interfaces";
 import {KeyringPair} from "@polkadot/keyring/types";
 
@@ -146,16 +146,31 @@ export class Dispatcher {
         return tmp;
     }
 
+    async returnNonce(activeNonce: bigint): Promise<boolean> {
+        if(this.nonce === activeNonce + BigInt(1)) {
+            this.nonce = activeNonce;
+            return true;
+        } else {
+            return Promise.reject("Nonce has already progressed. Account out of sync with dispatcher. Need to abort or inject xt with nonce: " + activeNonce + " in order to progress.");
+        }
+    }
+
     async dryRun(xts: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>): Promise<boolean> {
         for(const xt of xts) {
-            let result = await xt.dryRun(this.signer);
+            // TODO: Currently no check is possible, as the nodes seem not to suply this rpc method...
+            /*
+            // @ts-ignore
+            let result = await this.api.rpc.system.dryRun(xt.toHex()).catch(err => {
+                console.log(err);
+            });
 
             // @ts-ignore
             if (result.isErr()){
                 return false;
             }
+            */
         }
-
+        console.log("No checks performed, due to unavailability of `dry_run()` on chain.");
         return true;
     }
 
@@ -189,29 +204,35 @@ export class Dispatcher {
             this.dispatched += BigInt(1);
             this.running += 1;
 
-            const unsub = await extrinsic.signAndSend(this.signer, {nonce: -1}, ({events = [], status}) => {
-                if (status.isInBlock) {
-                    events.forEach(({event: {data, method, section}, phase}) => {
-                        if (method === 'ExtrinsicSuccess') {
-                            this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                        } else if (method === 'ExtrinsicFailed') {
-                            this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()])
-                            this.cbErr([extrinsic])
-                        }
+            const send = async function() {
+                let activeNonce = await this.nextNonce();
+                const unsub = await extrinsic.signAndSend(this.signer, {nonce: activeNonce}, ({ events = [], status}) => {
+                    if (status.isInBlock) {
+                        events.forEach(({event: {data, method, section}, phase}) => {
+                            if (method === 'ExtrinsicSuccess') {
+                                this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                            } else if (method === 'ExtrinsicFailed') {
+                                this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()])
+                                this.cbErr([extrinsic])
+                            }
 
-                        this.running -= 1;
-                    });
-                } else if (status.isFinalized) {
+                            this.running -= 1;
+                        });
+                    } else if (status.isFinalized) {
+                        // @ts-ignore
+                        unsub();
+                    }
                     // @ts-ignore
-                    unsub();
-                }
-            // @ts-ignore
-            }).catch((err) => {
-                this.running -= 1;
-                this.dispatched -= BigInt(1);
-                this.cbErr(xts);
-                console.log(err)
-            });
+                }).catch(async (err) => {
+                    this.running -= 1;
+                    this.dispatched -= BigInt(1);
+                    this.cbErr(xts);
+                    await this.returnNonce(activeNonce).catch((err) => console.log(err));
+                    console.log(err)
+                });
+            }
+
+            await send().catch((err) => console.log(err));
         }
     }
 
@@ -228,7 +249,7 @@ export class Dispatcher {
     private async dispatchInternalInSequence(xts: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>) {
         let xt = xts.shift();
 
-        let callNext = async () => {
+        let callNext = async function () {
             let extrinsic = xts.shift();
 
             if (extrinsic === undefined) {
@@ -241,30 +262,39 @@ export class Dispatcher {
             this.dispatched += BigInt(1);
             this.running += 1;
 
-            const unsub = await extrinsic.signAndSend(this.signer, {nonce: -1}, ({events = [], status}) => {
-                if (status.isInBlock) {
-                    events.forEach(({event: {data, method, section}, phase}) => {
-                        if (method === 'ExtrinsicSuccess') {
-                            this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                            callNext();
-                        } else if (method === 'ExtrinsicFailed') {
-                            this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()])
-                            this.cbErr([extrinsic])
-                        }
+            const send = async function() {
+                let activeNonce = await this.nextNonce();
+                const unsub = await extrinsic.signAndSend(this.signer, {nonce: activeNonce}, ({
+                                                                                                  events = [],
+                                                                                                  status
+                                                                                              }) => {
+                    if (status.isInBlock) {
+                        events.forEach(({event: {data, method, section}, phase}) => {
+                            if (method === 'ExtrinsicSuccess') {
+                                this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                callNext();
+                            } else if (method === 'ExtrinsicFailed') {
+                                this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()])
+                                this.cbErr([extrinsic])
+                            }
 
-                        this.running -= 1;
-                    });
-                } else if (status.isFinalized) {
+                            this.running -= 1;
+                        });
+                    } else if (status.isFinalized) {
+                        // @ts-ignore
+                        unsub();
+                    }
                     // @ts-ignore
-                    unsub();
-                }
-            // @ts-ignore
-            }).catch((err) => {
-                this.running -= 1;
-                this.dispatched -= BigInt(1);
-                this.cbErr(xts);
-                console.log(err)
-            });
+                }).catch(async (err) => {
+                    this.running -= 1;
+                    this.dispatched -= BigInt(1);
+                    this.cbErr(xts);
+                    await this.returnNonce(activeNonce).catch((err) => console.log(err));
+                    console.log(err)
+                });
+
+                await send().catch((err) => console.log(err));
+            }
         }
 
         while (this.running >= this.maxConcurrent) {
@@ -273,37 +303,43 @@ export class Dispatcher {
         this.dispatched += BigInt(1);
         this.running += 1;
 
-        const unsub = await xt.signAndSend(this.signer, {nonce: -1}, ({events = [], status}) => {
-            if (status.isInBlock) {
-                events.forEach(({event: {data, method, section}, phase}) => {
-                    if (method === 'ExtrinsicSuccess') {
-                        this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                        callNext();
-                    } else if (method === 'ExtrinsicFailed') {
-                        this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()])
-                        this.cbErr([xt])
-                    }
+        const send = async function() {
+            let activeNonce = await this.nextNonce();
+            const unsub = await xt.signAndSend(this.signer, {nonce: activeNonce}, ({events = [], status}) => {
+                if (status.isInBlock) {
+                    events.forEach(({event: {data, method, section}, phase}) => {
+                        if (method === 'ExtrinsicSuccess') {
+                            this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                            callNext();
+                        } else if (method === 'ExtrinsicFailed') {
+                            this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()])
+                            this.cbErr([xt])
+                        }
 
-                    this.running -= 1;
-                });
-            } else if (status.isFinalized) {
+                        this.running -= 1;
+                    });
+                } else if (status.isFinalized) {
+                    // @ts-ignore
+                    unsub();
+                }
                 // @ts-ignore
-                unsub();
-            }
-        // @ts-ignore
-        }).catch((err) => {
-            this.running -= 1;
-            this.dispatched -= BigInt(1);
-            this.cbErr(xts);
-            console.log(err)
-        });
+            }).catch(async (err) => {
+                this.running -= 1;
+                this.dispatched -= BigInt(1);
+                this.cbErr(xts);
+                await this.returnNonce(activeNonce).catch((err) => console.log(err));
+                console.log(err)
+            });
+        }
+
+        await send().catch((err) => console.log(err));
     }
 
 
     async sudoDispatch(xts: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>) {
-        /*if (!await this.dryRun(xts)) {
+        if (!await this.dryRun(xts)) {
             this.cbErr(xts)
-        }*/
+        }
 
         let counter = 0;
         for (const extrinsic of xts) {
@@ -322,38 +358,42 @@ export class Dispatcher {
             this.running += 1;
             console.log("Sending with nonce " + this.nonce + ", running " + this.running +" : " + extrinsic.meta.name.toString());
 
-            let activeNonce = await this.nextNonce();
-            // TODO: Add this for all items
-            const unsub = await this.api.tx.sudo.sudo(extrinsic)
-                .signAndSend(this.signer, {nonce: activeNonce}, ({events = [], status}) => {
-                    if (status.isInBlock || status.isFinalized) {
-                        console.log("Sending with nonce " + activeNonce + " is in Block/Finalized : " + extrinsic.meta.name.toString());
-                        events.filter(({ event }) =>
+            const send = async function() {
+                let activeNonce = await this.nextNonce();
+                const unsub = await this.api.tx.sudo.sudo(extrinsic)
+                    .signAndSend(this.signer, {nonce: activeNonce}, ({events = [], status}) => {
+                        if (status.isInBlock || status.isFinalized) {
+                            console.log("Sending with nonce " + activeNonce + " is in Block/Finalized : " + extrinsic.meta.name.toString());
+                            events.filter(({event}) =>
                                 this.api.events.sudo.Sudid.is(event)
                             )
-                            .forEach(({ event : { data: [result]}, phase }) => {
-                                // We know that `Sudid` returns just a `Result`
-                                // @ts-ignore
-                                if (result.isError) {
-                                    this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                    this.cbErr([extrinsic])
-                                    console.log("Sudo error: " + activeNonce);
-                                } else {
-                                    this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                    console.log("Sudo ok: " + activeNonce);
-                                }
-                            });
+                                .forEach(({event: {data: [result]}, phase}) => {
+                                    // We know that `Sudid` returns just a `Result`
+                                    // @ts-ignore
+                                    if (result.isError) {
+                                        this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                        this.cbErr([extrinsic])
+                                        console.log("Sudo error: " + activeNonce);
+                                    } else {
+                                        this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                        console.log("Sudo ok: " + activeNonce);
+                                    }
+                                });
 
+                            this.running -= 1;
+                            // @ts-ignore
+                            unsub();
+                        }
+                    }).catch(async (err) => {
                         this.running -= 1;
-                        // @ts-ignore
-                        unsub();
-                    }
-            }).catch((err) => {
-                this.running -= 1;
-                this.dispatched -= BigInt(1);
-                this.cbErr([extrinsic]);
-                console.log(err)
-            });
+                        this.dispatched -= BigInt(1);
+                        this.cbErr([extrinsic]);
+                        await this.returnNonce(activeNonce).catch((err) => console.log(err));
+                        console.log(err)
+                    });
+            }
+
+            await send().catch((err) => console.log(err));
         }
     }
 
@@ -368,31 +408,38 @@ export class Dispatcher {
         this.dispatched += BigInt(1);
         this.running += 1;
 
-        const unsub = await this.api.tx.utility
-            .batch(xts)
-            .signAndSend(this.signer, { nonce: -1 }, ({ status, events }) => {
-                if (status.isInBlock) {
-                    events.forEach(({event: {data, method, section}, phase}) => {
-                        if (method === 'ExtrinsicSuccess') {
-                            this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                        } else if (method === 'ExtrinsicFailed') {
-                            this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                            this.cbErr(xts);
-                        }
-                    });
+        const send = async function() {
+            let activeNonce = await this.nextNonce();
+            const unsub = await this.api.tx.utility
+                .batch(xts)
+                .signAndSend(this.signer, {nonce: activeNonce}, ({status, events}) => {
+                    if (status.isInBlock) {
+                        events.forEach(({event: {data, method, section}, phase}) => {
+                            if (method === 'ExtrinsicSuccess') {
+                                this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                            } else if (method === 'ExtrinsicFailed') {
+                                this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                this.cbErr(xts);
+                            }
+                        });
 
+                        this.running -= 1;
+                    } else if (status.isFinalized) {
+                        // @ts-ignore
+                        unsub();
+                    }
+                }).catch(async (err) => {
                     this.running -= 1;
-                } else if (status.isFinalized) {
-                    // @ts-ignore
-                    unsub();
-                }
-            }).catch((err) => {
-                this.running -= 1;
-                this.dispatched -= BigInt(1);
-                this.cbErr(xts);
-                console.log(err)
-            });
+                    this.dispatched -= BigInt(1);
+                    this.cbErr(xts);
+                    await this.returnNonce(activeNonce).catch((err) => console.log(err));
+                    console.log(err)
+                });
+        }
+
+        await send().catch((err) => console.log(err));
     }
+
 }
 
 
@@ -429,5 +476,56 @@ export class StorageItemElement extends StorageElement {
         this.palletHash = xxhashAsHex(pallet, 128);
         this.item = item;
         this.itemHash = xxhashAsHex(item, 128);
+    }
+}
+
+export async function test_run () {
+    const wsProvider = new WsProvider("wss://fullnode-archive.centrifuge.io");
+    const api = await ApiPromise.create({
+        provider: wsProvider,
+        types: {
+            ProxyType: {
+                _enum: ['Any', 'NonTransfer', 'Governance', 'Staking', 'Vesting']
+            }
+        }
+    });
+
+    const keyring = new Keyring({type: 'sr25519'});
+    let alice = keyring.addFromUri('//Alice');
+    let failed: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>> = new Array();
+
+    const { nonce } = await api.query.system.account(alice.address);
+
+    const cbErr = (xts: Array<SubmittableExtrinsic<ApiTypes, SubmittableResult>>) => {
+        for(const xt of xts) {
+            console.log(xt.toHuman());
+        }
+    }
+
+    let dispatcher = new Dispatcher(api, alice, nonce.toBigInt(), cbErr, 10, 100);
+
+    for (let i = 0; i < 100; i++) {
+        let send = async function sending(){
+            const nonce = await dispatcher.nextNonce();
+
+            await sendingInternal(dispatcher, i, nonce)
+                    .catch(async (err) => {
+                        console.log(err);
+                await dispatcher.returnNonce(nonce).catch((err) => {console.log(err)});
+            });
+        };
+
+        await send();
+    }
+
+    api.disconnect();
+}
+
+
+async function sendingInternal(dispatcher: Dispatcher, anynumber: number, nonce: bigint): Promise<bigint>{
+    if (anynumber % 2 === 0) {
+        console.log("Run: " + anynumber + ", nonce: " + nonce);
+    } else {
+        return Promise.reject("Uneven call...");
     }
 }

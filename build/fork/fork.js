@@ -195,10 +195,12 @@ function fetchState(api, at, key) {
                 case 1:
                     keyArray = _a.sent();
                     if (!(keyArray === undefined || keyArray.length === 0)) return [3 /*break*/, 3];
+                    console.log("Fetched keys: 1");
                     return [4 /*yield*/, api.rpc.state.getStorage(key)];
                 case 2:
                     value = _a.sent();
                     if (value !== undefined) {
+                        console.log("Fetched storage values: 1/1");
                         // @ts-ignore
                         return [2 /*return*/, [[key, value.toU8a(true)]]];
                     }

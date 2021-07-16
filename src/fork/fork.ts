@@ -32,7 +32,6 @@ export default class ForkCommand extends Command {
         'modules': flags.string({
             char: 'm',
             multiple: true,
-
         }),
         'no-default': flags.boolean({
             description: 'Do not fork the default modules. Namely: System, Balances',
@@ -122,9 +121,11 @@ async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<A
 
     // getKeysPaged does not work for StorageValues, lets try if it is one
     if (keyArray === undefined || keyArray.length === 0) {
+        console.log("Fetched keys: 1");
         let value = await api.rpc.state.getStorage(key);
 
         if (value !== undefined) {
+            console.log("Fetched storage values: 1/1");
             // @ts-ignore
             return [[key, value.toU8a(true)]]
         }

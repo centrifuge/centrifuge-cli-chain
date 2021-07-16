@@ -51,8 +51,9 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.StorageItemElement = exports.PalletElement = exports.StorageElement = exports.Dispatcher = exports.toByteArray = exports.toHexString = exports.insertOrNewMap = exports.parseModuleInput = exports.checkAvailability = exports.getDefaultStorage = void 0;
+exports.test_run = exports.StorageItemElement = exports.PalletElement = exports.StorageElement = exports.Dispatcher = exports.toByteArray = exports.toHexString = exports.insertOrNewMap = exports.parseModuleInput = exports.checkAvailability = exports.getDefaultStorage = void 0;
 var util_crypto_1 = require("@polkadot/util-crypto");
+var api_1 = require("@polkadot/api");
 function getDefaultStorage() {
     return [
         parseModuleInput("Balances.TotalIssuance"),
@@ -210,6 +211,20 @@ var Dispatcher = /** @class */ (function () {
             });
         });
     };
+    Dispatcher.prototype.returnNonce = function (activeNonce) {
+        return __awaiter(this, void 0, void 0, function () {
+            return __generator(this, function (_a) {
+                if (this.nonce === activeNonce + BigInt(1)) {
+                    this.nonce = activeNonce;
+                    return [2 /*return*/, true];
+                }
+                else {
+                    return [2 /*return*/, Promise.reject("Nonce has already progressed. Account out of sync with dispatcher. Need to abort or inject xt with nonce: " + activeNonce + " in order to progress.")];
+                }
+                return [2 /*return*/];
+            });
+        });
+    };
     Dispatcher.prototype.dryRun = function (xts) {
         return __awaiter(this, void 0, void 0, function () {
             var _i, xts_1, xt, result;
@@ -221,7 +236,11 @@ var Dispatcher = /** @class */ (function () {
                     case 1:
                         if (!(_i < xts_1.length)) return [3 /*break*/, 4];
                         xt = xts_1[_i];
-                        return [4 /*yield*/, xt.dryRun(this.signer)];
+                        console.log("DryRunning: " + xt.toHuman());
+                        return [4 /*yield*/, this.api.rpc.system.dryRun(xt.toHex()).catch(function (err) {
+                                console.log(err);
+                                return false;
+                            })];
                     case 2:
                         result = _a.sent();
                         // @ts-ignore
@@ -265,13 +284,12 @@ var Dispatcher = /** @class */ (function () {
     Dispatcher.prototype.dispatchInternal = function (xts) {
         return __awaiter(this, void 0, void 0, function () {
             var counter, _loop_2, this_1, _i, xts_2, extrinsic;
-            var _this = this;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
                         counter = 0;
                         _loop_2 = function (extrinsic) {
-                            var unsub;
+                            var send;
                             return __generator(this, function (_b) {
                                 switch (_b.label) {
                                     case 0:
@@ -290,34 +308,60 @@ var Dispatcher = /** @class */ (function () {
                                     case 4:
                                         this_1.dispatched += BigInt(1);
                                         this_1.running += 1;
-                                        return [4 /*yield*/, extrinsic.signAndSend(this_1.signer, { nonce: -1 }, function (_a) {
-                                                var _b = _a.events, events = _b === void 0 ? [] : _b, status = _a.status;
-                                                if (status.isInBlock) {
-                                                    events.forEach(function (_a) {
-                                                        var _b = _a.event, data = _b.data, method = _b.method, section = _b.section, phase = _a.phase;
-                                                        if (method === 'ExtrinsicSuccess') {
-                                                            _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                                        }
-                                                        else if (method === 'ExtrinsicFailed') {
-                                                            _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                                            _this.cbErr([extrinsic]);
-                                                        }
-                                                        _this.running -= 1;
-                                                    });
-                                                }
-                                                else if (status.isFinalized) {
-                                                    // @ts-ignore
-                                                    unsub();
-                                                }
-                                                // @ts-ignore
-                                            }).catch(function (err) {
-                                                _this.running -= 1;
-                                                _this.dispatched -= BigInt(1);
-                                                _this.cbErr(xts);
-                                                console.log(err);
-                                            })];
+                                        send = function () {
+                                            return __awaiter(this, void 0, void 0, function () {
+                                                var activeNonce, unsub;
+                                                var _this = this;
+                                                return __generator(this, function (_a) {
+                                                    switch (_a.label) {
+                                                        case 0: return [4 /*yield*/, this.nextNonce()];
+                                                        case 1:
+                                                            activeNonce = _a.sent();
+                                                            return [4 /*yield*/, extrinsic.signAndSend(this.signer, { nonce: activeNonce }, function (_a) {
+                                                                    var _b = _a.events, events = _b === void 0 ? [] : _b, status = _a.status;
+                                                                    if (status.isInBlock) {
+                                                                        events.forEach(function (_a) {
+                                                                            var _b = _a.event, data = _b.data, method = _b.method, section = _b.section, phase = _a.phase;
+                                                                            if (method === 'ExtrinsicSuccess') {
+                                                                                _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                                                            }
+                                                                            else if (method === 'ExtrinsicFailed') {
+                                                                                _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                                                                _this.cbErr([extrinsic]);
+                                                                            }
+                                                                            _this.running -= 1;
+                                                                        });
+                                                                    }
+                                                                    else if (status.isFinalized) {
+                                                                        // @ts-ignore
+                                                                        unsub();
+                                                                    }
+                                                                    // @ts-ignore
+                                                                }).catch(function (err) { return __awaiter(_this, void 0, void 0, function () {
+                                                                    return __generator(this, function (_a) {
+                                                                        switch (_a.label) {
+                                                                            case 0:
+                                                                                this.running -= 1;
+                                                                                this.dispatched -= BigInt(1);
+                                                                                this.cbErr(xts);
+                                                                                return [4 /*yield*/, this.returnNonce(activeNonce).catch(function (err) { return console.log(err); })];
+                                                                            case 1:
+                                                                                _a.sent();
+                                                                                console.log(err);
+                                                                                return [2 /*return*/];
+                                                                        }
+                                                                    });
+                                                                }); })];
+                                                        case 2:
+                                                            unsub = _a.sent();
+                                                            return [2 /*return*/];
+                                                    }
+                                                });
+                                            });
+                                        };
+                                        return [4 /*yield*/, send().catch(function (err) { return console.log(err); })];
                                     case 5:
-                                        unsub = _b.sent();
+                                        _b.sent();
                                         return [2 /*return*/];
                                 }
                             });
@@ -358,65 +402,91 @@ var Dispatcher = /** @class */ (function () {
     };
     Dispatcher.prototype.dispatchInternalInSequence = function (xts) {
         return __awaiter(this, void 0, void 0, function () {
-            var xt, callNext, unsub;
-            var _this = this;
+            var xt, callNext, send;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
                         xt = xts.shift();
-                        callNext = function () { return __awaiter(_this, void 0, void 0, function () {
-                            var extrinsic, unsub;
-                            var _this = this;
-                            return __generator(this, function (_a) {
-                                switch (_a.label) {
-                                    case 0:
-                                        extrinsic = xts.shift();
-                                        if (extrinsic === undefined) {
-                                            return [2 /*return*/];
-                                        }
-                                        _a.label = 1;
-                                    case 1:
-                                        if (!(this.running >= this.maxConcurrent)) return [3 /*break*/, 3];
-                                        return [4 /*yield*/, new Promise(function (r) { return setTimeout(r, 6000); })];
-                                    case 2:
-                                        _a.sent();
-                                        return [3 /*break*/, 1];
-                                    case 3:
-                                        this.dispatched += BigInt(1);
-                                        this.running += 1;
-                                        return [4 /*yield*/, extrinsic.signAndSend(this.signer, { nonce: -1 }, function (_a) {
-                                                var _b = _a.events, events = _b === void 0 ? [] : _b, status = _a.status;
-                                                if (status.isInBlock) {
-                                                    events.forEach(function (_a) {
-                                                        var _b = _a.event, data = _b.data, method = _b.method, section = _b.section, phase = _a.phase;
-                                                        if (method === 'ExtrinsicSuccess') {
-                                                            _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                                            callNext();
+                        callNext = function () {
+                            return __awaiter(this, void 0, void 0, function () {
+                                var extrinsic, send;
+                                return __generator(this, function (_a) {
+                                    switch (_a.label) {
+                                        case 0:
+                                            extrinsic = xts.shift();
+                                            if (extrinsic === undefined) {
+                                                return [2 /*return*/];
+                                            }
+                                            _a.label = 1;
+                                        case 1:
+                                            if (!(this.running >= this.maxConcurrent)) return [3 /*break*/, 3];
+                                            return [4 /*yield*/, new Promise(function (r) { return setTimeout(r, 6000); })];
+                                        case 2:
+                                            _a.sent();
+                                            return [3 /*break*/, 1];
+                                        case 3:
+                                            this.dispatched += BigInt(1);
+                                            this.running += 1;
+                                            send = function () {
+                                                return __awaiter(this, void 0, void 0, function () {
+                                                    var activeNonce, unsub;
+                                                    var _this = this;
+                                                    return __generator(this, function (_a) {
+                                                        switch (_a.label) {
+                                                            case 0: return [4 /*yield*/, this.nextNonce()];
+                                                            case 1:
+                                                                activeNonce = _a.sent();
+                                                                return [4 /*yield*/, extrinsic.signAndSend(this.signer, { nonce: activeNonce }, function (_a) {
+                                                                        var _b = _a.events, events = _b === void 0 ? [] : _b, status = _a.status;
+                                                                        if (status.isInBlock) {
+                                                                            events.forEach(function (_a) {
+                                                                                var _b = _a.event, data = _b.data, method = _b.method, section = _b.section, phase = _a.phase;
+                                                                                if (method === 'ExtrinsicSuccess') {
+                                                                                    _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                                                                    callNext();
+                                                                                }
+                                                                                else if (method === 'ExtrinsicFailed') {
+                                                                                    _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                                                                    _this.cbErr([extrinsic]);
+                                                                                }
+                                                                                _this.running -= 1;
+                                                                            });
+                                                                        }
+                                                                        else if (status.isFinalized) {
+                                                                            // @ts-ignore
+                                                                            unsub();
+                                                                        }
+                                                                        // @ts-ignore
+                                                                    }).catch(function (err) { return __awaiter(_this, void 0, void 0, function () {
+                                                                        return __generator(this, function (_a) {
+                                                                            switch (_a.label) {
+                                                                                case 0:
+                                                                                    this.running -= 1;
+                                                                                    this.dispatched -= BigInt(1);
+                                                                                    this.cbErr(xts);
+                                                                                    return [4 /*yield*/, this.returnNonce(activeNonce).catch(function (err) { return console.log(err); })];
+                                                                                case 1:
+                                                                                    _a.sent();
+                                                                                    console.log(err);
+                                                                                    return [2 /*return*/];
+                                                                            }
+                                                                        });
+                                                                    }); })];
+                                                            case 2:
+                                                                unsub = _a.sent();
+                                                                return [4 /*yield*/, send().catch(function (err) { return console.log(err); })];
+                                                            case 3:
+                                                                _a.sent();
+                                                                return [2 /*return*/];
                                                         }
-                                                        else if (method === 'ExtrinsicFailed') {
-                                                            _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                                            _this.cbErr([extrinsic]);
-                                                        }
-                                                        _this.running -= 1;
                                                     });
-                                                }
-                                                else if (status.isFinalized) {
-                                                    // @ts-ignore
-                                                    unsub();
-                                                }
-                                                // @ts-ignore
-                                            }).catch(function (err) {
-                                                _this.running -= 1;
-                                                _this.dispatched -= BigInt(1);
-                                                _this.cbErr(xts);
-                                                console.log(err);
-                                            })];
-                                    case 4:
-                                        unsub = _a.sent();
-                                        return [2 /*return*/];
-                                }
+                                                });
+                                            };
+                                            return [2 /*return*/];
+                                    }
+                                });
                             });
-                        }); };
+                        };
                         _a.label = 1;
                     case 1:
                         if (!(this.running >= this.maxConcurrent)) return [3 /*break*/, 3];
@@ -427,35 +497,61 @@ var Dispatcher = /** @class */ (function () {
                     case 3:
                         this.dispatched += BigInt(1);
                         this.running += 1;
-                        return [4 /*yield*/, xt.signAndSend(this.signer, { nonce: -1 }, function (_a) {
-                                var _b = _a.events, events = _b === void 0 ? [] : _b, status = _a.status;
-                                if (status.isInBlock) {
-                                    events.forEach(function (_a) {
-                                        var _b = _a.event, data = _b.data, method = _b.method, section = _b.section, phase = _a.phase;
-                                        if (method === 'ExtrinsicSuccess') {
-                                            _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                            callNext();
-                                        }
-                                        else if (method === 'ExtrinsicFailed') {
-                                            _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                            _this.cbErr([xt]);
-                                        }
-                                        _this.running -= 1;
-                                    });
-                                }
-                                else if (status.isFinalized) {
-                                    // @ts-ignore
-                                    unsub();
-                                }
-                                // @ts-ignore
-                            }).catch(function (err) {
-                                _this.running -= 1;
-                                _this.dispatched -= BigInt(1);
-                                _this.cbErr(xts);
-                                console.log(err);
-                            })];
+                        send = function () {
+                            return __awaiter(this, void 0, void 0, function () {
+                                var activeNonce, unsub;
+                                var _this = this;
+                                return __generator(this, function (_a) {
+                                    switch (_a.label) {
+                                        case 0: return [4 /*yield*/, this.nextNonce()];
+                                        case 1:
+                                            activeNonce = _a.sent();
+                                            return [4 /*yield*/, xt.signAndSend(this.signer, { nonce: activeNonce }, function (_a) {
+                                                    var _b = _a.events, events = _b === void 0 ? [] : _b, status = _a.status;
+                                                    if (status.isInBlock) {
+                                                        events.forEach(function (_a) {
+                                                            var _b = _a.event, data = _b.data, method = _b.method, section = _b.section, phase = _a.phase;
+                                                            if (method === 'ExtrinsicSuccess') {
+                                                                _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                                                callNext();
+                                                            }
+                                                            else if (method === 'ExtrinsicFailed') {
+                                                                _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                                                _this.cbErr([xt]);
+                                                            }
+                                                            _this.running -= 1;
+                                                        });
+                                                    }
+                                                    else if (status.isFinalized) {
+                                                        // @ts-ignore
+                                                        unsub();
+                                                    }
+                                                    // @ts-ignore
+                                                }).catch(function (err) { return __awaiter(_this, void 0, void 0, function () {
+                                                    return __generator(this, function (_a) {
+                                                        switch (_a.label) {
+                                                            case 0:
+                                                                this.running -= 1;
+                                                                this.dispatched -= BigInt(1);
+                                                                this.cbErr(xts);
+                                                                return [4 /*yield*/, this.returnNonce(activeNonce).catch(function (err) { return console.log(err); })];
+                                                            case 1:
+                                                                _a.sent();
+                                                                console.log(err);
+                                                                return [2 /*return*/];
+                                                        }
+                                                    });
+                                                }); })];
+                                        case 2:
+                                            unsub = _a.sent();
+                                            return [2 /*return*/];
+                                    }
+                                });
+                            });
+                        };
+                        return [4 /*yield*/, send().catch(function (err) { return console.log(err); })];
                     case 4:
-                        unsub = _a.sent();
+                        _a.sent();
                         return [2 /*return*/];
                 }
             });
@@ -464,13 +560,16 @@ var Dispatcher = /** @class */ (function () {
     Dispatcher.prototype.sudoDispatch = function (xts) {
         return __awaiter(this, void 0, void 0, function () {
             var counter, _loop_3, this_2, _i, xts_3, extrinsic;
-            var _this = this;
             return __generator(this, function (_a) {
                 switch (_a.label) {
-                    case 0:
+                    case 0: return [4 /*yield*/, this.dryRun(xts)];
+                    case 1:
+                        if (!(_a.sent())) {
+                            this.cbErr(xts);
+                        }
                         counter = 0;
                         _loop_3 = function (extrinsic) {
-                            var activeNonce, unsub;
+                            var send;
                             return __generator(this, function (_b) {
                                 switch (_b.label) {
                                     case 0:
@@ -492,70 +591,92 @@ var Dispatcher = /** @class */ (function () {
                                         this_2.dispatched += BigInt(1);
                                         this_2.running += 1;
                                         console.log("Sending with nonce " + this_2.nonce + ", running " + this_2.running + " : " + extrinsic.meta.name.toString());
-                                        return [4 /*yield*/, this_2.nextNonce()];
+                                        send = function () {
+                                            return __awaiter(this, void 0, void 0, function () {
+                                                var activeNonce, unsub;
+                                                var _this = this;
+                                                return __generator(this, function (_a) {
+                                                    switch (_a.label) {
+                                                        case 0: return [4 /*yield*/, this.nextNonce()];
+                                                        case 1:
+                                                            activeNonce = _a.sent();
+                                                            return [4 /*yield*/, this.api.tx.sudo.sudo(extrinsic)
+                                                                    .signAndSend(this.signer, { nonce: activeNonce }, function (_a) {
+                                                                    var _b = _a.events, events = _b === void 0 ? [] : _b, status = _a.status;
+                                                                    if (status.isInBlock || status.isFinalized) {
+                                                                        console.log("Sending with nonce " + activeNonce + " is in Block/Finalized : " + extrinsic.meta.name.toString());
+                                                                        events.filter(function (_a) {
+                                                                            var event = _a.event;
+                                                                            return _this.api.events.sudo.Sudid.is(event);
+                                                                        })
+                                                                            .forEach(function (_a) {
+                                                                            var result = _a.event.data[0], phase = _a.phase;
+                                                                            // We know that `Sudid` returns just a `Result`
+                                                                            // @ts-ignore
+                                                                            if (result.isError) {
+                                                                                _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                                                                _this.cbErr([extrinsic]);
+                                                                                console.log("Sudo error: " + activeNonce);
+                                                                            }
+                                                                            else {
+                                                                                _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                                                                console.log("Sudo ok: " + activeNonce);
+                                                                            }
+                                                                        });
+                                                                        _this.running -= 1;
+                                                                        // @ts-ignore
+                                                                        unsub();
+                                                                    }
+                                                                }).catch(function (err) { return __awaiter(_this, void 0, void 0, function () {
+                                                                    return __generator(this, function (_a) {
+                                                                        switch (_a.label) {
+                                                                            case 0:
+                                                                                this.running -= 1;
+                                                                                this.dispatched -= BigInt(1);
+                                                                                this.cbErr([extrinsic]);
+                                                                                return [4 /*yield*/, this.returnNonce(activeNonce).catch(function (err) { return console.log(err); })];
+                                                                            case 1:
+                                                                                _a.sent();
+                                                                                console.log(err);
+                                                                                return [2 /*return*/];
+                                                                        }
+                                                                    });
+                                                                }); })];
+                                                        case 2:
+                                                            unsub = _a.sent();
+                                                            return [2 /*return*/];
+                                                    }
+                                                });
+                                            });
+                                        };
+                                        return [4 /*yield*/, send().catch(function (err) { return console.log(err); })];
                                     case 5:
-                                        activeNonce = _b.sent();
-                                        return [4 /*yield*/, this_2.api.tx.sudo.sudo(extrinsic)
-                                                .signAndSend(this_2.signer, { nonce: activeNonce }, function (_a) {
-                                                var _b = _a.events, events = _b === void 0 ? [] : _b, status = _a.status;
-                                                if (status.isInBlock || status.isFinalized) {
-                                                    console.log("Sending with nonce " + activeNonce + " is in Block/Finalized : " + extrinsic.meta.name.toString());
-                                                    events.filter(function (_a) {
-                                                        var event = _a.event;
-                                                        return _this.api.events.sudo.Sudid.is(event);
-                                                    })
-                                                        .forEach(function (_a) {
-                                                        var result = _a.event.data[0], phase = _a.phase;
-                                                        // We know that `Sudid` returns just a `Result`
-                                                        // @ts-ignore
-                                                        if (result.isError) {
-                                                            _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                                            _this.cbErr([extrinsic]);
-                                                            console.log("Sudo error: " + activeNonce);
-                                                        }
-                                                        else {
-                                                            _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                                            console.log("Sudo ok: " + activeNonce);
-                                                        }
-                                                    });
-                                                    _this.running -= 1;
-                                                    // @ts-ignore
-                                                    unsub();
-                                                }
-                                            }).catch(function (err) {
-                                                _this.running -= 1;
-                                                _this.dispatched -= BigInt(1);
-                                                _this.cbErr([extrinsic]);
-                                                console.log(err);
-                                            })];
-                                    case 6:
-                                        unsub = _b.sent();
+                                        _b.sent();
                                         return [2 /*return*/];
                                 }
                             });
                         };
                         this_2 = this;
                         _i = 0, xts_3 = xts;
-                        _a.label = 1;
-                    case 1:
-                        if (!(_i < xts_3.length)) return [3 /*break*/, 4];
+                        _a.label = 2;
+                    case 2:
+                        if (!(_i < xts_3.length)) return [3 /*break*/, 5];
                         extrinsic = xts_3[_i];
                         return [5 /*yield**/, _loop_3(extrinsic)];
-                    case 2:
-                        _a.sent();
-                        _a.label = 3;
                     case 3:
+                        _a.sent();
+                        _a.label = 4;
+                    case 4:
                         _i++;
-                        return [3 /*break*/, 1];
-                    case 4: return [2 /*return*/];
+                        return [3 /*break*/, 2];
+                    case 5: return [2 /*return*/];
                 }
             });
         });
     };
     Dispatcher.prototype.batchDispatch = function (xts) {
         return __awaiter(this, void 0, void 0, function () {
-            var unsub;
-            var _this = this;
+            var send;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0: return [4 /*yield*/, this.dryRun(xts)];
@@ -573,35 +694,61 @@ var Dispatcher = /** @class */ (function () {
                     case 4:
                         this.dispatched += BigInt(1);
                         this.running += 1;
-                        return [4 /*yield*/, this.api.tx.utility
-                                .batch(xts)
-                                .signAndSend(this.signer, { nonce: -1 }, function (_a) {
-                                var status = _a.status, events = _a.events;
-                                if (status.isInBlock) {
-                                    events.forEach(function (_a) {
-                                        var _b = _a.event, data = _b.data, method = _b.method, section = _b.section, phase = _a.phase;
-                                        if (method === 'ExtrinsicSuccess') {
-                                            _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                        }
-                                        else if (method === 'ExtrinsicFailed') {
-                                            _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
-                                            _this.cbErr(xts);
-                                        }
-                                    });
-                                    _this.running -= 1;
-                                }
-                                else if (status.isFinalized) {
-                                    // @ts-ignore
-                                    unsub();
-                                }
-                            }).catch(function (err) {
-                                _this.running -= 1;
-                                _this.dispatched -= BigInt(1);
-                                _this.cbErr(xts);
-                                console.log(err);
-                            })];
+                        send = function () {
+                            return __awaiter(this, void 0, void 0, function () {
+                                var activeNonce, unsub;
+                                var _this = this;
+                                return __generator(this, function (_a) {
+                                    switch (_a.label) {
+                                        case 0: return [4 /*yield*/, this.nextNonce()];
+                                        case 1:
+                                            activeNonce = _a.sent();
+                                            return [4 /*yield*/, this.api.tx.utility
+                                                    .batch(xts)
+                                                    .signAndSend(this.signer, { nonce: activeNonce }, function (_a) {
+                                                    var status = _a.status, events = _a.events;
+                                                    if (status.isInBlock) {
+                                                        events.forEach(function (_a) {
+                                                            var _b = _a.event, data = _b.data, method = _b.method, section = _b.section, phase = _a.phase;
+                                                            if (method === 'ExtrinsicSuccess') {
+                                                                _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                                            }
+                                                            else if (method === 'ExtrinsicFailed') {
+                                                                _this.dispatchHashes.push([status.asInBlock, phase.asApplyExtrinsic.toBigInt()]);
+                                                                _this.cbErr(xts);
+                                                            }
+                                                        });
+                                                        _this.running -= 1;
+                                                    }
+                                                    else if (status.isFinalized) {
+                                                        // @ts-ignore
+                                                        unsub();
+                                                    }
+                                                }).catch(function (err) { return __awaiter(_this, void 0, void 0, function () {
+                                                    return __generator(this, function (_a) {
+                                                        switch (_a.label) {
+                                                            case 0:
+                                                                this.running -= 1;
+                                                                this.dispatched -= BigInt(1);
+                                                                this.cbErr(xts);
+                                                                return [4 /*yield*/, this.returnNonce(activeNonce).catch(function (err) { return console.log(err); })];
+                                                            case 1:
+                                                                _a.sent();
+                                                                console.log(err);
+                                                                return [2 /*return*/];
+                                                        }
+                                                    });
+                                                }); })];
+                                        case 2:
+                                            unsub = _a.sent();
+                                            return [2 /*return*/];
+                                    }
+                                });
+                            });
+                        };
+                        return [4 /*yield*/, send().catch(function (err) { return console.log(err); })];
                     case 5:
-                        unsub = _a.sent();
+                        _a.sent();
                         return [2 /*return*/];
                 }
             });
@@ -645,4 +792,107 @@ var StorageItemElement = /** @class */ (function (_super) {
     return StorageItemElement;
 }(StorageElement));
 exports.StorageItemElement = StorageItemElement;
+function test_run() {
+    return __awaiter(this, void 0, void 0, function () {
+        var wsProvider, api, keyring, alice, failed, nonce, cbErr, dispatcher, _loop_4, i;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    wsProvider = new api_1.WsProvider("wss://fullnode-archive.centrifuge.io");
+                    return [4 /*yield*/, api_1.ApiPromise.create({
+                            provider: wsProvider,
+                            types: {
+                                ProxyType: {
+                                    _enum: ['Any', 'NonTransfer', 'Governance', 'Staking', 'Vesting']
+                                }
+                            }
+                        })];
+                case 1:
+                    api = _a.sent();
+                    keyring = new api_1.Keyring({ type: 'sr25519' });
+                    alice = keyring.addFromUri('//Alice');
+                    failed = new Array();
+                    return [4 /*yield*/, api.query.system.account(alice.address)];
+                case 2:
+                    nonce = (_a.sent()).nonce;
+                    cbErr = function (xts) {
+                        for (var _i = 0, xts_4 = xts; _i < xts_4.length; _i++) {
+                            var xt = xts_4[_i];
+                            console.log(xt.toHuman());
+                        }
+                    };
+                    dispatcher = new Dispatcher(api, alice, nonce.toBigInt(), cbErr, 10, 100);
+                    _loop_4 = function (i) {
+                        var send;
+                        return __generator(this, function (_b) {
+                            switch (_b.label) {
+                                case 0:
+                                    send = function sending() {
+                                        return __awaiter(this, void 0, void 0, function () {
+                                            var nonce;
+                                            var _this = this;
+                                            return __generator(this, function (_a) {
+                                                switch (_a.label) {
+                                                    case 0: return [4 /*yield*/, dispatcher.nextNonce()];
+                                                    case 1:
+                                                        nonce = _a.sent();
+                                                        return [4 /*yield*/, sendingInternal(dispatcher, i, nonce)
+                                                                .catch(function (err) { return __awaiter(_this, void 0, void 0, function () {
+                                                                return __generator(this, function (_a) {
+                                                                    switch (_a.label) {
+                                                                        case 0:
+                                                                            console.log(err);
+                                                                            return [4 /*yield*/, dispatcher.returnNonce(nonce).catch(function (err) { console.log(err); })];
+                                                                        case 1:
+                                                                            _a.sent();
+                                                                            return [2 /*return*/];
+                                                                    }
+                                                                });
+                                                            }); })];
+                                                    case 2:
+                                                        _a.sent();
+                                                        return [2 /*return*/];
+                                                }
+                                            });
+                                        });
+                                    };
+                                    return [4 /*yield*/, send()];
+                                case 1:
+                                    _b.sent();
+                                    return [2 /*return*/];
+                            }
+                        });
+                    };
+                    i = 0;
+                    _a.label = 3;
+                case 3:
+                    if (!(i < 100)) return [3 /*break*/, 6];
+                    return [5 /*yield**/, _loop_4(i)];
+                case 4:
+                    _a.sent();
+                    _a.label = 5;
+                case 5:
+                    i++;
+                    return [3 /*break*/, 3];
+                case 6:
+                    api.disconnect();
+                    return [2 /*return*/];
+            }
+        });
+    });
+}
+exports.test_run = test_run;
+function sendingInternal(dispatcher, anynumber, nonce) {
+    return __awaiter(this, void 0, void 0, function () {
+        return __generator(this, function (_a) {
+            if (anynumber % 2 === 0) {
+                console.log("Run: " + anynumber + ", nonce: " + nonce);
+            }
+            else {
+                return [2 /*return*/, Promise.reject("Uneven call...")];
+            }
+            return [2 /*return*/];
+        });
+    });
+}
 //# sourceMappingURL=common.js.map
