@@ -552,42 +552,63 @@ function verifyProxyProxies(oldData, oldApi, newData, newApi) {
 }
 function verifyVestingVesting(oldData, oldApi, newData, newApi, atFrom, atTo) {
     return __awaiter(this, void 0, void 0, function () {
-        var failed, newDataMap, checked, _i, oldData_4, _a, key, value, oldVestingInfo, blockPeriodOldVesting, blocksPassedSinceVestingStart, remainingBlocksVestingOld, newScale, newVestingInfo, blockPeriodNewVesting, blocksPassedSinceVestingStartNew, remainingBlocksVestingNew;
+        var failed, newDataMap, checked, _i, oldData_4, _a, key, value, oldBalance, newBalance, overallOld, overallNew, oldVestingInfo, blockPeriodOldVesting, blocksPassedSinceVestingStart, remainingBlocksVestingOld, newScale, newVestingInfo, blockPeriodNewVesting, blocksPassedSinceVestingStartNew, remainingBlocksVestingNew;
         return __generator(this, function (_b) {
-            failed = new Array();
-            newDataMap = newData.reduce(function (map, obj) {
-                map[obj[0].toHex()] = obj[1];
-                return map;
-            }, new Map());
-            checked = 0;
-            for (_i = 0, oldData_4 = oldData; _i < oldData_4.length; _i++) {
-                _a = oldData_4[_i], key = _a[0], value = _a[1];
-                process.stdout.write("    Verifying:    " + checked + "/ \r");
-                oldVestingInfo = oldApi.createType('VestingInfo', value);
-                blockPeriodOldVesting = (oldVestingInfo.locked.toBigInt() / oldVestingInfo.perBlock.toBigInt());
-                blocksPassedSinceVestingStart = (atFrom - oldVestingInfo.startingBlock.toBigInt());
-                remainingBlocksVestingOld = blockPeriodOldVesting - blocksPassedSinceVestingStart;
-                if (oldVestingInfo.startingBlock.toBigInt() - atFrom >= 0) {
-                    // Vesting has passed, the chain will resolve this directly upon our inserts.
-                }
-                else {
-                    newScale = newDataMap.get(key.toHex());
-                    if (newScale !== undefined) {
-                        newVestingInfo = oldApi.createType('VestingInfo', newScale.get(key.toHex()[1]));
-                        blockPeriodNewVesting = newVestingInfo.locked.toBigInt() / newVestingInfo.perBlock.toBigInt();
-                        blocksPassedSinceVestingStartNew = (atTo - newVestingInfo.startingBlock.toBigInt());
-                        remainingBlocksVestingNew = blockPeriodNewVesting - blocksPassedSinceVestingStart;
-                        if (remainingBlocksVestingOld !== (remainingBlocksVestingNew * BigInt(2))) {
+            switch (_b.label) {
+                case 0:
+                    failed = new Array();
+                    newDataMap = newData.reduce(function (map, obj) {
+                        map[obj[0].toHex()] = obj[1];
+                        return map;
+                    }, new Map());
+                    checked = 0;
+                    _i = 0, oldData_4 = oldData;
+                    _b.label = 1;
+                case 1:
+                    if (!(_i < oldData_4.length)) return [3 /*break*/, 5];
+                    _a = oldData_4[_i], key = _a[0], value = _a[1];
+                    process.stdout.write("    Verifying:    " + checked + "/ \r");
+                    return [4 /*yield*/, oldApi.query.system.account(key.toU8a(true).slice(-32))];
+                case 2:
+                    oldBalance = (_b.sent()).data;
+                    return [4 /*yield*/, newApi.query.system.account(key.toU8a(true).slice(-32))];
+                case 3:
+                    newBalance = (_b.sent()).data;
+                    overallOld = oldBalance.free.toBigInt() + oldBalance.reserved.toBigInt();
+                    overallNew = newBalance.free.toBigInt() + newBalance.reserved.toBigInt();
+                    if (overallNew !== overallNew) {
+                        failed.push([key, value]);
+                        return [3 /*break*/, 4];
+                    }
+                    oldVestingInfo = oldApi.createType('VestingInfo', value);
+                    blockPeriodOldVesting = (oldVestingInfo.locked.toBigInt() / oldVestingInfo.perBlock.toBigInt());
+                    blocksPassedSinceVestingStart = (atFrom - oldVestingInfo.startingBlock.toBigInt());
+                    remainingBlocksVestingOld = blockPeriodOldVesting - blocksPassedSinceVestingStart;
+                    if (oldVestingInfo.startingBlock.toBigInt() - atFrom >= 0) {
+                        // Vesting has passed, the chain will resolve this directly upon our inserts.
+                    }
+                    else {
+                        newScale = newDataMap.get(key.toHex());
+                        if (newScale !== undefined) {
+                            newVestingInfo = oldApi.createType('VestingInfo', newScale.get(key.toHex()[1]));
+                            blockPeriodNewVesting = newVestingInfo.locked.toBigInt() / newVestingInfo.perBlock.toBigInt();
+                            blocksPassedSinceVestingStartNew = (atTo - newVestingInfo.startingBlock.toBigInt());
+                            remainingBlocksVestingNew = blockPeriodNewVesting - blocksPassedSinceVestingStartNew;
+                            if (remainingBlocksVestingOld !== (remainingBlocksVestingNew * BigInt(2))) {
+                                failed.push([key, value]);
+                            }
+                        }
+                        else {
                             failed.push([key, value]);
                         }
                     }
-                    else {
-                        failed.push([key, value]);
-                    }
-                }
-                checked += 1;
+                    checked += 1;
+                    _b.label = 4;
+                case 4:
+                    _i++;
+                    return [3 /*break*/, 1];
+                case 5: return [2 /*return*/, failed];
             }
-            return [2 /*return*/, failed];
         });
     });
 }
@@ -775,7 +796,7 @@ function prepareProxyProxies(toApi, values) {
                 counter += 1;
                 if (item instanceof transform_1.StorageMapValue) {
                     if (packetOfProxies.length === maxProxies - 1 || counter === values.length) {
-                        accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32));
+                        accountId = toApi.createType("AccountId", item.patriciaKey.toU8a(true).slice(-32));
                         proxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', item.value);
                         //console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
                         packetOfProxies.push([accountId, item.optional, item.value]);
@@ -783,7 +804,7 @@ function prepareProxyProxies(toApi, values) {
                         packetOfProxies = new Array();
                     }
                     else {
-                        accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32));
+                        accountId = toApi.createType("AccountId", item.patriciaKey.toU8a(true).slice(-32));
                         proxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', item.value);
                         //console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
                         packetOfProxies.push([accountId, item.optional, item.value]);
@@ -945,7 +966,7 @@ function prepareVestingVestingInfo(toApi, values) {
                 counter += 1;
                 if (item instanceof transform_1.StorageMapValue) {
                     vestingInfo = toApi.createType("VestingInfo", item.value);
-                    accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32));
+                    accountId = toApi.createType("AccountId", item.patriciaKey.toU8a(true).slice(-32));
                     if (packetOfVestings.length === maxVestings - 1 || counter === values.length) {
                         // push the last element and prepare extrinsic
                         packetOfVestings.push([accountId, vestingInfo]);
@@ -970,7 +991,7 @@ function test_run() {
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
-                    wsProviderFrom = new api_1.WsProvider("wss://fullnode-archive.amber.centrifuge.io");
+                    wsProviderFrom = new api_1.WsProvider("wss://fullnode-archive.centrifuge.io");
                     return [4 /*yield*/, api_1.ApiPromise.create({
                             provider: wsProviderFrom,
                             types: {
@@ -1025,7 +1046,7 @@ function test_run() {
                         })];
                 case 8:
                     results = _a.sent();
-                    return [4 /*yield*/, this.toApi.rpc.chain.getHeader()];
+                    return [4 /*yield*/, toApi.rpc.chain.getHeader()];
                 case 9:
                     lastHdr = _a.sent();
                     newTo = lastHdr.hash;

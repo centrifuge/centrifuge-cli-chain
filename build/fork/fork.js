@@ -186,12 +186,12 @@ function fork(api, storageItems, at) {
 exports.fork = fork;
 function fetchState(api, at, key) {
     return __awaiter(this, void 0, void 0, function () {
-        var keyArray, value, fetched, accumulate, nextStartKey, intermArray, pairs, _i, keyArray_1, storageKey, storageValue;
+        var keyArray, value, valueArray, fetched, accumulate, nextStartKey, intermArray, pairs, _i, keyArray_1, storageKey, storageValue, storageArray;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
                     console.log("Fetching storage for prefix: " + key.toHuman());
-                    return [4 /*yield*/, api.rpc.state.getKeysPaged(key, 1000)];
+                    return [4 /*yield*/, api.rpc.state.getKeysPaged(key, 1000, key, at)];
                 case 1:
                     keyArray = _a.sent();
                     if (!(keyArray === undefined || keyArray.length === 0)) return [3 /*break*/, 3];
@@ -200,9 +200,15 @@ function fetchState(api, at, key) {
                 case 2:
                     value = _a.sent();
                     if (value !== undefined) {
+                        valueArray = value.toU8a(true);
                         console.log("Fetched storage values: 1/1");
-                        // @ts-ignore
-                        return [2 /*return*/, [[key, value.toU8a(true)]]];
+                        if (valueArray.length > 0) {
+                            return [2 /*return*/, [[key, valueArray]]];
+                        }
+                        else {
+                            console.log("ERROR: Fetched empty storage value for key " + key.toHex() + "\n");
+                            return [2 /*return*/, []];
+                        }
                     }
                     _a.label = 3;
                 case 3:
@@ -236,8 +242,13 @@ function fetchState(api, at, key) {
                     return [4 /*yield*/, api.rpc.state.getStorage(storageKey)];
                 case 8:
                     storageValue = _a.sent();
-                    // @ts-ignore
-                    pairs.push([storageKey, storageValue.toU8a(true)]);
+                    storageArray = storageValue.toU8a(true);
+                    if (storageArray !== undefined && storageArray.length > 0) {
+                        pairs.push([storageKey, storageArray]);
+                    }
+                    else {
+                        console.log("ERROR: Fetched empty storage value for key " + storageKey.toHex() + "\n");
+                    }
                     accumulate = accumulate + 1;
                     process.stdout.write("Fetched storage values: " + accumulate + "/" + keyArray.length + "\r");
                     _a.label = 9;
@@ -277,6 +288,9 @@ function test_run() {
                     return [4 /*yield*/, fork(fromApi, storageItems, at)];
                 case 3:
                     state = _a.sent();
+                    return [4 /*yield*/, fromApi.disconnect()];
+                case 4:
+                    _a.sent();
                     return [2 /*return*/];
             }
         });

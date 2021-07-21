@@ -117,7 +117,9 @@ export async function fork(api: ApiPromise, storageItems: Array<StorageElement>,
 async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<Array<[ StorageKey, Uint8Array | number[]]>> {
     console.log("Fetching storage for prefix: " + key.toHuman());
 
-    let keyArray = await api.rpc.state.getKeysPaged(key, 1000);
+    // The substrate api does provide the actual prefix, as the next_key, as we do here, when next key
+    // is not available. In order to use the at option, we do this here upfront.
+    let keyArray = await api.rpc.state.getKeysPaged(key, 1000, key, at);
 
     // getKeysPaged does not work for StorageValues, lets try if it is one
     if (keyArray === undefined || keyArray.length === 0) {
@@ -125,9 +127,16 @@ async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<A
         let value = await api.rpc.state.getStorage(key);
 
         if (value !== undefined) {
-            console.log("Fetched storage values: 1/1");
             // @ts-ignore
-            return [[key, value.toU8a(true)]]
+            let valueArray = value.toU8a(true);
+            console.log("Fetched storage values: 1/1");
+
+            if (valueArray.length > 0) {
+                return [[key, valueArray]];
+            } else {
+                console.log("ERROR: Fetched empty storage value for key " + key.toHex() + "\n");
+                return [];
+            }
         }
     }
 
@@ -156,7 +165,13 @@ async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<A
     for (const storageKey of keyArray) {
         let storageValue = await api.rpc.state.getStorage(storageKey);
         // @ts-ignore
-        pairs.push([storageKey, storageValue.toU8a(true)]);
+        let storageArray = storageValue.toU8a(true);
+
+        if (storageArray !== undefined && storageArray.length > 0) {
+            pairs.push([storageKey, storageArray]);
+        } else {
+            console.log("ERROR: Fetched empty storage value for key " + storageKey.toHex() + "\n");
+        }
 
         accumulate = accumulate + 1;
         process.stdout.write("Fetched storage values: " + accumulate + "/" + keyArray.length + "\r");
@@ -186,4 +201,6 @@ export async function test_run() {
     let at = lastFromHdr.hash;
 
     let state: Map<string, Array<[ StorageKey, Uint8Array | number[]]>> = await fork(fromApi, storageItems, at);
+
+    await fromApi.disconnect()
 }

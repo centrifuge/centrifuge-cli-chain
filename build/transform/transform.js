@@ -594,7 +594,7 @@ var StorageDoubleMapValue = /** @class */ (function (_super) {
 exports.StorageDoubleMapValue = StorageDoubleMapValue;
 function test_run() {
     return __awaiter(this, void 0, void 0, function () {
-        var wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadataFrom, metadataTo, lastFromHdr, at, lastToHdr, to, migrationData;
+        var wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadataFrom, metadataTo, lastFromHdr, at, lastToHdr, to, oldBalance, migrationData;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -636,9 +636,15 @@ function test_run() {
                 case 6:
                     lastToHdr = _a.sent();
                     to = lastToHdr.hash;
-                    return [4 /*yield*/, transform(fromApi, toApi, storageItems, at, to)];
+                    return [4 /*yield*/, toApi.query.system.account("5CXG8xbMr1ZpKpDVhgXsvWRqHC7PLgBPfvyQsaNLBoy7y9vs")];
                 case 7:
+                    oldBalance = (_a.sent()).data;
+                    console.log(oldBalance.toHuman());
+                    return [4 /*yield*/, transform(fromApi, toApi, storageItems, at, to)];
+                case 8:
                     migrationData = _a.sent();
+                    // This can be used to output rust code for the unit test of the pallet_migration_manager
+                    // await transformToRustCode(fromApi, toApi, 6400000);
                     fromApi.disconnect();
                     toApi.disconnect();
                     return [2 /*return*/];
@@ -647,4 +653,173 @@ function test_run() {
     });
 }
 exports.test_run = test_run;
+function transformToRustCode(fromApi, toApi, atNum) {
+    var _a, _b, _c, _d;
+    return __awaiter(this, void 0, void 0, function () {
+        var storageItems, lastFromHdr, at, lastToHdr, to, state, _i, storageItems_2, element, data, count, bytesKey, bytesValue, msg, _e, data_1, keyValue, intermMsg, data, count, bytesKey, bytesValue, msg, _f, data_2, keyValue, intermMsg, data, count, bytesKey, bytesOptional, msg, _g, data_3, keyValue, intermMsg, data, count, bytesKey, bytesValue, msg, _h, data_4, keyValue, intermMsg, _j;
+        return __generator(this, function (_k) {
+            switch (_k.label) {
+                case 0:
+                    storageItems = new Array();
+                    storageItems.push.apply(storageItems, common_1.getDefaultStorage());
+                    return [4 /*yield*/, fromApi.rpc.chain.getHeader()];
+                case 1:
+                    lastFromHdr = _k.sent();
+                    return [4 /*yield*/, fromApi.rpc.chain.getBlockHash(atNum)];
+                case 2:
+                    at = _k.sent();
+                    return [4 /*yield*/, toApi.rpc.chain.getHeader()];
+                case 3:
+                    lastToHdr = _k.sent();
+                    to = lastToHdr.hash;
+                    return [4 /*yield*/, transform(fromApi, toApi, storageItems, at, to)];
+                case 4:
+                    state = _k.sent();
+                    _i = 0, storageItems_2 = storageItems;
+                    _k.label = 5;
+                case 5:
+                    if (!(_i < storageItems_2.length)) return [3 /*break*/, 15];
+                    element = storageItems_2[_i];
+                    if (!(element instanceof common_1.StorageItemElement)) return [3 /*break*/, 14];
+                    if (!(element.pallet === "System" && element.item === "Account")) return [3 /*break*/, 6];
+                    data = (_a = state.get(element.palletHash)) === null || _a === void 0 ? void 0 : _a.get(element.key);
+                    count = data.length;
+                    bytesKey = 0;
+                    bytesValue = 0;
+                    msg = "pub const SYSTEM_ACCOUNT: [AccountKeyValue;" + count.toString() + "] = [ \n";
+                    for (_e = 0, data_1 = data; _e < data_1.length; _e++) {
+                        keyValue = data_1[_e];
+                        if (keyValue instanceof StorageMapValue) {
+                            bytesKey = keyValue.patriciaKey.toU8a(true).length;
+                            bytesValue = Array.from(keyValue.value).length;
+                            intermMsg = "AccountKeyValue { \n";
+                            intermMsg += "key: [ \n";
+                            intermMsg += Array.from(keyValue.patriciaKey.toU8a(true)).toString() + "\n";
+                            intermMsg += "], \n value: [ \n";
+                            intermMsg += Array.from(keyValue.value).toString() + "\n";
+                            intermMsg += "], \n },";
+                            msg += intermMsg;
+                        }
+                    }
+                    msg += "\n]; \n\n";
+                    msg += "pub struct AccountKeyValue { \n"
+                        + "pub key: [u8;" + bytesKey.toString() + "], \n"
+                        + "pub value: [u8;" + bytesValue.toString() + "] \n"
+                        + "}";
+                    console.log(msg);
+                    console.log();
+                    return [3 /*break*/, 14];
+                case 6:
+                    if (!(element.pallet === "Vesting" && element.item === "Vesting")) return [3 /*break*/, 7];
+                    data = (_b = state.get(element.palletHash)) === null || _b === void 0 ? void 0 : _b.get(element.key);
+                    count = data.length;
+                    bytesKey = 0;
+                    bytesValue = 0;
+                    msg = "pub const VESTING_VESTING: [VestingKeyValue;" + count.toString() + "] = [ \n";
+                    for (_f = 0, data_2 = data; _f < data_2.length; _f++) {
+                        keyValue = data_2[_f];
+                        if (keyValue instanceof StorageMapValue) {
+                            bytesKey = keyValue.patriciaKey.toU8a(true).length;
+                            bytesValue = Array.from(keyValue.value).length;
+                            intermMsg = "VestingKeyValue { \n";
+                            intermMsg += "key: [ \n";
+                            intermMsg += Array.from(keyValue.patriciaKey.toU8a(true)).toString() + "\n";
+                            intermMsg += "], \n value: [ \n";
+                            intermMsg += Array.from(keyValue.value).toString() + "\n";
+                            intermMsg += "], \n },";
+                            msg += intermMsg;
+                        }
+                    }
+                    msg += "\n]; \n\n";
+                    msg += "pub struct VestingKeyValue { \n"
+                        + "pub key: [u8;" + bytesKey.toString() + "], \n"
+                        + "pub value: [u8;" + bytesValue.toString() + "] \n"
+                        + "}";
+                    console.log(msg);
+                    console.log();
+                    return [3 /*break*/, 14];
+                case 7:
+                    if (!(element.pallet === "Proxy" && element.item === "Proxies")) return [3 /*break*/, 8];
+                    data = (_c = state.get(element.palletHash)) === null || _c === void 0 ? void 0 : _c.get(element.key);
+                    count = data.length;
+                    bytesKey = 0;
+                    bytesOptional = 0;
+                    msg = "#[allow(non_snake_case)]\n"
+                        + "pub fn PROXY_PROXIES() -> Vec<ProxiesKeyValue> {\n"
+                        + "vec![\n";
+                    for (_g = 0, data_3 = data; _g < data_3.length; _g++) {
+                        keyValue = data_3[_g];
+                        if (keyValue instanceof StorageMapValue) {
+                            bytesKey = keyValue.patriciaKey.toU8a(true).length;
+                            bytesOptional = Array.from(keyValue.optional.toU8a(true)).length;
+                            intermMsg = "ProxiesKeyValue { \n"
+                                + "key: [ \n"
+                                + Array.from(keyValue.patriciaKey.toU8a(true)).toString() + "\n"
+                                + "], \n"
+                                + "value: vec![ \n"
+                                + Array.from(keyValue.value).toString() + "\n"
+                                + "],\n"
+                                + "optional: [ \n"
+                                + Array.from(keyValue.optional.toU8a(true)).toString() + "\n"
+                                + "],\n"
+                                + "\n },";
+                            msg += intermMsg;
+                        }
+                    }
+                    msg += "\n]\n} \n\n";
+                    msg += "pub struct ProxiesKeyValue { \n"
+                        + "pub key: [u8;" + bytesKey.toString() + "], \n"
+                        + "pub value: Vec<u8>, \n"
+                        + "pub optional: [u8;" + bytesOptional.toString() + "], \n"
+                        + "}";
+                    console.log(msg);
+                    console.log();
+                    return [3 /*break*/, 14];
+                case 8:
+                    if (!(element.pallet === "Balances" && element.item === "TotalIssuance")) return [3 /*break*/, 14];
+                    data = (_d = state.get(element.palletHash)) === null || _d === void 0 ? void 0 : _d.get(element.key);
+                    count = data.length;
+                    bytesKey = 0;
+                    bytesValue = 0;
+                    msg = "pub const TOTAL_ISSUANCE: TotalIssuanceKeyValue = \n";
+                    _h = 0, data_4 = data;
+                    _k.label = 9;
+                case 9:
+                    if (!(_h < data_4.length)) return [3 /*break*/, 13];
+                    keyValue = data_4[_h];
+                    return [4 /*yield*/, common_1.toByteArray(element.key.slice(2))];
+                case 10:
+                    bytesKey = (_k.sent()).length;
+                    bytesValue = Array.from(keyValue.value).length;
+                    intermMsg = "TotalIssuanceKeyValue { \n";
+                    intermMsg += "key: [ \n";
+                    _j = intermMsg;
+                    return [4 /*yield*/, common_1.toByteArray(element.key.slice(2))];
+                case 11:
+                    intermMsg = _j + ((_k.sent()).toString() + "\n");
+                    intermMsg += "], \n value: [ \n";
+                    intermMsg += Array.from(keyValue.value).toString() + "\n";
+                    intermMsg += "], \n };";
+                    msg += intermMsg;
+                    _k.label = 12;
+                case 12:
+                    _h++;
+                    return [3 /*break*/, 9];
+                case 13:
+                    msg += "\n\n";
+                    msg += "pub struct TotalIssuanceKeyValue { \n"
+                        + "pub key: [u8;" + bytesKey.toString() + "], \n"
+                        + "pub value: [u8;" + bytesValue.toString() + "] \n"
+                        + "}";
+                    console.log(msg);
+                    console.log();
+                    _k.label = 14;
+                case 14:
+                    _i++;
+                    return [3 /*break*/, 5];
+                case 15: return [2 /*return*/];
+            }
+        });
+    });
+}
 //# sourceMappingURL=transform.js.map

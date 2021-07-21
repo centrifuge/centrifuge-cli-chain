@@ -8,7 +8,7 @@ import {
     insertOrNewMap,
     StorageElement,
     parseModuleInput,
-    checkAvailability, getDefaultStorage
+    checkAvailability, getDefaultStorage, PalletElement, StorageItemElement, toByteArray
 } from "../common/common";
 import {StorageKey} from "@polkadot/types";
 
@@ -463,8 +463,7 @@ export async function test_run() {
         }
     });
 
-    const wsProviderTo = new WsProvider("ws://127.0.0.1:9946");
-    //const wsProviderTo = new WsProvider("wss://fullnode-collator.charcoal.centrifuge.io");
+    const wsProviderTo = new WsProvider("ws://127.0.0.1:9946"); // Or: wss://fullnode-collator.charcoal.centrifuge.io
     const toApi = await ApiPromise.create({
         provider: wsProviderTo,
         types: {
@@ -474,12 +473,12 @@ export async function test_run() {
         }
     });
 
+
     let storageItems = new Array();
     storageItems.push(...getDefaultStorage());
 
     const metadataFrom = await fromApi.rpc.state.getMetadata();
     const metadataTo = await fromApi.rpc.state.getMetadata();
-
 
     const lastFromHdr = await fromApi.rpc.chain.getHeader();
     let at = lastFromHdr.hash;
@@ -488,6 +487,163 @@ export async function test_run() {
 
     let migrationData = await transform(fromApi, toApi, storageItems, at, to);
 
+    // This can be used to output rust code for the unit test of the pallet_migration_manager
+    // await transformToRustCode(fromApi, toApi, 6400000);
+
     fromApi.disconnect();
     toApi.disconnect();
+}
+
+async function transformToRustCode(fromApi: ApiPromise, toApi:ApiPromise, atNum: number) {
+
+    let storageItems = new Array();
+    storageItems.push(...getDefaultStorage());
+    const lastFromHdr = await fromApi.rpc.chain.getHeader();
+    let at = await  fromApi.rpc.chain.getBlockHash(atNum);
+    const lastToHdr = await toApi.rpc.chain.getHeader();
+    let to = lastToHdr.hash
+
+    let state = await transform(fromApi, toApi, storageItems, at, to);
+
+    for (const element of storageItems) {
+        if (element instanceof StorageItemElement) {
+            if (element.pallet === "System" && element.item === "Account") {
+                let data = state.get(element.palletHash)?.get(element.key);
+                let count = data.length;
+                let bytesKey = 0;
+                let bytesValue = 0;
+
+                let msg = "pub const SYSTEM_ACCOUNT: [AccountKeyValue;" + count.toString() + "] = [ \n";
+                for (const keyValue of data) {
+                    if (keyValue instanceof StorageMapValue) {
+                        bytesKey = keyValue.patriciaKey.toU8a(true).length;
+                        bytesValue = Array.from(keyValue.value).length;
+
+                        let intermMsg = "AccountKeyValue { \n";
+                        intermMsg += "key: [ \n";
+                        intermMsg +=  Array.from(keyValue.patriciaKey.toU8a(true)).toString() + "\n";
+                        intermMsg +=  "], \n value: [ \n";
+                        intermMsg +=  Array.from(keyValue.value).toString() + "\n";
+                        intermMsg += "], \n },"
+
+                        msg += intermMsg;
+                    }
+                }
+
+                msg += "\n]; \n\n"
+
+                msg  += "pub struct AccountKeyValue { \n"
+                    + "pub key: [u8;" + bytesKey.toString() + "], \n"
+                    + "pub value: [u8;" + bytesValue.toString() + "] \n"
+                    + "}"
+
+                console.log(msg);
+                console.log();
+            } else if (element.pallet === "Vesting" && element.item === "Vesting") {
+                let data = state.get(element.palletHash)?.get(element.key);
+                let count = data.length;
+                let bytesKey = 0;
+                let bytesValue = 0;
+
+                let msg = "pub const VESTING_VESTING: [VestingKeyValue;" + count.toString() + "] = [ \n";
+                for (const keyValue of data) {
+                    if (keyValue instanceof StorageMapValue) {
+                        bytesKey = keyValue.patriciaKey.toU8a(true).length;
+                        bytesValue = Array.from(keyValue.value).length;
+
+                        let intermMsg = "VestingKeyValue { \n";
+                        intermMsg += "key: [ \n";
+                        intermMsg +=  Array.from(keyValue.patriciaKey.toU8a(true)).toString() + "\n";
+                        intermMsg +=  "], \n value: [ \n";
+                        intermMsg +=  Array.from(keyValue.value).toString() + "\n";
+                        intermMsg += "], \n },"
+
+                        msg += intermMsg;
+                    }
+                }
+
+                msg += "\n]; \n\n"
+
+                msg  += "pub struct VestingKeyValue { \n"
+                    + "pub key: [u8;" + bytesKey.toString() + "], \n"
+                    + "pub value: [u8;" + bytesValue.toString() + "] \n"
+                    + "}"
+
+                console.log(msg);
+                console.log();
+            } else if (element.pallet === "Proxy" && element.item === "Proxies") {
+                let data = state.get(element.palletHash)?.get(element.key);
+                let count = data.length;
+                let bytesKey = 0;
+                let bytesOptional = 0;
+
+                let msg = "#[allow(non_snake_case)]\n"
+                    + "pub fn PROXY_PROXIES() -> Vec<ProxiesKeyValue> {\n"
+                    + "vec![\n"
+
+                for (const keyValue of data) {
+                    if (keyValue instanceof StorageMapValue) {
+                        bytesKey = keyValue.patriciaKey.toU8a(true).length;
+                        bytesOptional = Array.from(keyValue.optional.toU8a(true)).length;
+
+
+                        let intermMsg = "ProxiesKeyValue { \n"
+                            + "key: [ \n"
+                            +  Array.from(keyValue.patriciaKey.toU8a(true)).toString() + "\n"
+                            + "], \n"
+                            + "value: vec![ \n"
+                            + Array.from(keyValue.value).toString() + "\n"
+                            + "],\n"
+                            + "optional: [ \n"
+                            + Array.from(keyValue.optional.toU8a(true)).toString() + "\n"
+                            + "],\n"
+                            + "\n },"
+
+                        msg += intermMsg;
+                    }
+                }
+
+                msg += "\n]\n} \n\n"
+
+                msg  += "pub struct ProxiesKeyValue { \n"
+                    + "pub key: [u8;" + bytesKey.toString() + "], \n"
+                    + "pub value: Vec<u8>, \n"
+                    + "pub optional: [u8;" + bytesOptional.toString() + "], \n"
+                    + "}"
+
+                console.log(msg);
+                console.log();
+            } else if (element.pallet === "Balances" && element.item === "TotalIssuance") {
+                let data = state.get(element.palletHash)?.get(element.key);
+                let count = data.length;
+                let bytesKey = 0;
+                let bytesValue = 0;
+
+                let msg = "pub const TOTAL_ISSUANCE: TotalIssuanceKeyValue = \n";
+                for (const keyValue of data) {
+                    bytesKey = (await toByteArray(element.key.slice(2))).length;
+                    bytesValue = Array.from(keyValue.value).length;
+
+                    let intermMsg = "TotalIssuanceKeyValue { \n";
+                    intermMsg += "key: [ \n";
+                    intermMsg +=  (await toByteArray(element.key.slice(2))).toString() + "\n";
+                    intermMsg +=  "], \n value: [ \n";
+                    intermMsg +=  Array.from(keyValue.value).toString() + "\n";
+                    intermMsg += "], \n };"
+
+                    msg += intermMsg;
+                }
+
+                msg += "\n\n"
+
+                msg  += "pub struct TotalIssuanceKeyValue { \n"
+                    + "pub key: [u8;" + bytesKey.toString() + "], \n"
+                    + "pub value: [u8;" + bytesValue.toString() + "] \n"
+                    + "}"
+
+                console.log(msg);
+                console.log();
+            }
+        }
+    }
 }

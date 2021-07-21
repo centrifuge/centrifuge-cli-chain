@@ -204,7 +204,7 @@ export class Dispatcher {
             this.dispatched += BigInt(1);
             this.running += 1;
 
-            const send = async function() {
+            const send = async () => {
                 let activeNonce = await this.nextNonce();
                 const unsub = await extrinsic.signAndSend(this.signer, {nonce: activeNonce}, ({ events = [], status}) => {
                     if (status.isInBlock) {
@@ -262,7 +262,7 @@ export class Dispatcher {
             this.dispatched += BigInt(1);
             this.running += 1;
 
-            const send = async function() {
+            const send = async () => {
                 let activeNonce = await this.nextNonce();
                 const unsub = await extrinsic.signAndSend(this.signer, {nonce: activeNonce}, ({
                                                                                                   events = [],
@@ -303,7 +303,7 @@ export class Dispatcher {
         this.dispatched += BigInt(1);
         this.running += 1;
 
-        const send = async function() {
+        const send = async () => {
             let activeNonce = await this.nextNonce();
             const unsub = await xt.signAndSend(this.signer, {nonce: activeNonce}, ({events = [], status}) => {
                 if (status.isInBlock) {
@@ -358,7 +358,7 @@ export class Dispatcher {
             this.running += 1;
             console.log("Sending with nonce " + this.nonce + ", running " + this.running +" : " + extrinsic.meta.name.toString());
 
-            const send = async function() {
+            const send = async () => {
                 let activeNonce = await this.nextNonce();
                 const unsub = await this.api.tx.sudo.sudo(extrinsic)
                     .signAndSend(this.signer, {nonce: activeNonce}, ({events = [], status}) => {
@@ -408,7 +408,7 @@ export class Dispatcher {
         this.dispatched += BigInt(1);
         this.running += 1;
 
-        const send = async function() {
+        const send = async () => {
             let activeNonce = await this.nextNonce();
             const unsub = await this.api.tx.utility
                 .batch(xts)

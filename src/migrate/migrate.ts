@@ -466,6 +466,18 @@ async function verifyVestingVesting(oldData: Array<[StorageKey, number[] | Uint8
     for(let [key, value] of oldData) {
         process.stdout.write("    Verifying:    "+ checked +"/ \r");
 
+        // Ensure existance of this account
+        const { data: oldBalance } = await oldApi.query.system.account(key.toU8a(true).slice(-32));
+        const { data: newBalance } = await newApi.query.system.account(key.toU8a(true).slice(-32));
+
+        let overallOld = oldBalance.free.toBigInt() + oldBalance.reserved.toBigInt();
+        let overallNew = newBalance.free.toBigInt() + newBalance.reserved.toBigInt();
+
+        if (overallNew !== overallNew) {
+            failed.push([key, value]);
+            continue;
+        }
+
         let oldVestingInfo = oldApi.createType('VestingInfo', value);
 
         const blockPeriodOldVesting = (oldVestingInfo.locked.toBigInt() / oldVestingInfo.perBlock.toBigInt());
@@ -481,7 +493,7 @@ async function verifyVestingVesting(oldData: Array<[StorageKey, number[] | Uint8
 
                 const blockPeriodNewVesting = newVestingInfo.locked.toBigInt() / newVestingInfo.perBlock.toBigInt();
                 const blocksPassedSinceVestingStartNew = (atTo - newVestingInfo.startingBlock.toBigInt());
-                const remainingBlocksVestingNew = blockPeriodNewVesting - blocksPassedSinceVestingStart;
+                const remainingBlocksVestingNew = blockPeriodNewVesting - blocksPassedSinceVestingStartNew;
 
                 if (remainingBlocksVestingOld !== (remainingBlocksVestingNew * BigInt(2))) {
                      failed.push([key, value]);
@@ -619,7 +631,7 @@ async function prepareProxyProxies(toApi: ApiPromise, values: StorageItem[]): Pr
         if (item instanceof StorageMapValue) {
             if (packetOfProxies.length === maxProxies - 1  || counter === values.length) {
                 // push the last element and prepare extrinsic
-                let accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32))
+                let accountId = toApi.createType("AccountId", item.patriciaKey.toU8a(true).slice(-32))
                 // @ts-ignore
                 let proxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', item.value);
 
@@ -630,7 +642,7 @@ async function prepareProxyProxies(toApi: ApiPromise, values: StorageItem[]): Pr
                 packetOfProxies = new Array();
 
             } else {
-                let accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32))
+                let accountId = toApi.createType("AccountId", item.patriciaKey.toU8a(true).slice(-32))
                 // @ts-ignore
                 let proxyInfo = toApi.createType('(Vec<ProxyDefinition<AccountId, ProxyType, BlockNumber>>, Balance)', item.value);
                 //console.log("Inserting Proxy data: " + accountId.toHuman(), item.optional.toHuman(), proxyInfo.toHuman());
@@ -743,7 +755,7 @@ async function prepareVestingVestingInfo(toApi: ApiPromise, values: StorageItem[
         counter += 1;
         if (item instanceof StorageMapValue) {
             let vestingInfo = toApi.createType("VestingInfo", item.value);
-            let accountId = toApi.createType("AccountId", item.patriciaKey.slice(-32))
+            let accountId = toApi.createType("AccountId", item.patriciaKey.toU8a(true).slice(-32))
 
             if (packetOfVestings.length === maxVestings - 1  || counter === values.length){
                 // push the last element and prepare extrinsic
@@ -764,7 +776,7 @@ async function prepareVestingVestingInfo(toApi: ApiPromise, values: StorageItem[
 
 
 export async function test_run() {
-    const wsProviderFrom = new WsProvider("wss://fullnode-archive.amber.centrifuge.io");
+    const wsProviderFrom = new WsProvider("wss://fullnode-archive.centrifuge.io");
     const fromApi = await ApiPromise.create({
         provider: wsProviderFrom,
         types: {
@@ -794,6 +806,7 @@ export async function test_run() {
 
     const lastFromHdr = await fromApi.rpc.chain.getHeader();
     let at = lastFromHdr.hash;
+
     const lastToHdr = await toApi.rpc.chain.getHeader();
     let to = lastToHdr.hash;
 
@@ -814,7 +827,7 @@ export async function test_run() {
         }
     });
 
-    const lastHdr = await this.toApi.rpc.chain.getHeader();
+    const lastHdr = await toApi.rpc.chain.getHeader();
     const newTo = lastHdr.hash;
     let verification = await verifyMigration(toApi, fromApi, storageItems, newTo, at);
 
