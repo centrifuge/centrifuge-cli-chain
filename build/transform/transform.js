@@ -594,7 +594,7 @@ var StorageDoubleMapValue = /** @class */ (function (_super) {
 exports.StorageDoubleMapValue = StorageDoubleMapValue;
 function test_run() {
     return __awaiter(this, void 0, void 0, function () {
-        var wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadataFrom, metadataTo, lastFromHdr, at, lastToHdr, to, oldBalance, migrationData;
+        var wsProviderFrom, fromApi, wsProviderTo, toApi, storageItems, metadataFrom, metadataTo, lastFromHdr, at, lastToHdr, to, migrationData;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -636,12 +636,8 @@ function test_run() {
                 case 6:
                     lastToHdr = _a.sent();
                     to = lastToHdr.hash;
-                    return [4 /*yield*/, toApi.query.system.account("5CXG8xbMr1ZpKpDVhgXsvWRqHC7PLgBPfvyQsaNLBoy7y9vs")];
-                case 7:
-                    oldBalance = (_a.sent()).data;
-                    console.log(oldBalance.toHuman());
                     return [4 /*yield*/, transform(fromApi, toApi, storageItems, at, to)];
-                case 8:
+                case 7:
                     migrationData = _a.sent();
                     // This can be used to output rust code for the unit test of the pallet_migration_manager
                     // await transformToRustCode(fromApi, toApi, 6400000);

@@ -1024,13 +1024,15 @@ function test_run() {
                     return [4 /*yield*/, fromApi.rpc.chain.getHeader()];
                 case 5:
                     lastFromHdr = _a.sent();
-                    at = lastFromHdr.hash;
-                    return [4 /*yield*/, toApi.rpc.chain.getHeader()];
+                    return [4 /*yield*/, fromApi.rpc.chain.getBlockHash(6650475)];
                 case 6:
+                    at = _a.sent();
+                    return [4 /*yield*/, toApi.rpc.chain.getHeader()];
+                case 7:
                     lastToHdr = _a.sent();
                     to = lastToHdr.hash;
                     return [4 /*yield*/, prepareMigrate(fromApi, toApi, storageItems, at, to)];
-                case 7:
+                case 8:
                     migrationData = _a.sent();
                     sequence = storageItems;
                     keyring = new api_1.Keyring({ type: 'sr25519' });
@@ -1044,14 +1046,14 @@ function test_run() {
                                 console.log(xt.toJSON());
                             }
                         })];
-                case 8:
+                case 9:
                     results = _a.sent();
                     return [4 /*yield*/, toApi.rpc.chain.getHeader()];
-                case 9:
+                case 10:
                     lastHdr = _a.sent();
                     newTo = lastHdr.hash;
                     return [4 /*yield*/, verifyMigration(toApi, fromApi, storageItems, newTo, at)];
-                case 10:
+                case 11:
                     verification = _a.sent();
                     if (verification.length === 0) {
                         console.log("Migration was successful.");

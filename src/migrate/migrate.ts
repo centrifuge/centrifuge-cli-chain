@@ -805,7 +805,8 @@ export async function test_run() {
 
 
     const lastFromHdr = await fromApi.rpc.chain.getHeader();
-    let at = lastFromHdr.hash;
+    //let at = lastFromHdr.hash;
+    let at = await  fromApi.rpc.chain.getBlockHash(6650475);
 
     const lastToHdr = await toApi.rpc.chain.getHeader();
     let to = lastToHdr.hash;
