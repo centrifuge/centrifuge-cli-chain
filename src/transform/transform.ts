@@ -113,9 +113,12 @@ export default class TransformCommand extends Command {
             // TODO: Log error and abort
         }
 
+
+        let started = await this.fromApi.rpc.chain.getHeader();
+
         let from: Hash;
         if (flags["from-block"] == '-1') {
-            const lastHdr = await this.fromApi.rpc.chain.getHeader();
+            const lastHdr = started;
             from = lastHdr.hash;
         } else {
             let bn = parseInt(flags['from-block']);
@@ -144,7 +147,7 @@ export default class TransformCommand extends Command {
         }
 
         try {
-            let state = await transform(this.fromApi, this.toApi, storageItems, from, to);
+            let state = await transform(this.fromApi, this.toApi, started, storageItems, from, to);
 
             if (flags["output"]) {
                 // TODO: Write stuff to a file here, correctly as a json
@@ -157,7 +160,7 @@ export default class TransformCommand extends Command {
     }
 }
 
-export async function transform(fromApi: ApiPromise, toApi: ApiPromise,  storageItems: Array<StorageElement>, atFrom: Hash, atTo: Hash): Promise<Map<string, Map<string, Array<StorageItem>>>>   {
+export async function transform(fromApi: ApiPromise, toApi: ApiPromise, startAt: Hash,  storageItems: Array<StorageElement>, atFrom: Hash, atTo: Hash): Promise<Map<string, Map<string, Array<StorageItem>>>>   {
     let forkData = Array.from(await fork(fromApi, storageItems, atFrom));
 
     let state: Map<string, Map<string, Array<StorageItem>>> = new Map();
@@ -177,7 +180,7 @@ export async function transform(fromApi: ApiPromise, toApi: ApiPromise,  storage
 
         } else if (key.startsWith(xxhashAsHex("Vesting", 128))) {
             let palletKey = xxhashAsHex("Vesting", 128);
-            let migratedPalletStorageItems = await transformVesting(fromApi, toApi, keyValues, atFrom, atTo);
+            let migratedPalletStorageItems = await transformVesting(fromApi, toApi, keyValues, startAt, atFrom, atTo);
             state.set(palletKey, migratedPalletStorageItems)
 
         } else if (key.startsWith(xxhashAsHex("Proxy", 128))) {
@@ -345,16 +348,17 @@ async function transformBalancesTotalIssuance(fromApi: ApiPromise, toApi: ApiPro
     return new StorageValueValue(newIssuance.toU8a(true));
 }
 
-async function transformVesting(fromApi: ApiPromise, toApi: ApiPromise, keyValues: Array<[StorageKey, number[] | Uint8Array]>, atFrom: Hash, atTo: Hash):  Promise<Map<string, Array<StorageItem>>> {
+async function transformVesting(fromApi: ApiPromise, toApi: ApiPromise, keyValues: Array<[StorageKey, number[] | Uint8Array]>, startAt: Hash, atFrom: Hash, atTo: Hash):  Promise<Map<string, Array<StorageItem>>> {
     let state: Map<string, Array<StorageItem>> = new Map();
     const atFromAsNumber = (await fromApi.rpc.chain.getBlock(atFrom)).block.header.number.toBigInt();
     const atToAsNumber = (await toApi.rpc.chain.getBlock(atTo)).block.header.number.toBigInt();
+    const startAtAsNumber =  (await toApi.rpc.chain.getBlock(startAt)).block.header.number.toBigInt();
 
 
     for(let [patriciaKey, value] of keyValues) {
         if (patriciaKey.toHex().startsWith(xxhashAsHex("Vesting", 128) + xxhashAsHex("Vesting", 128).slice(2))) {
             let pkStorageItem = xxhashAsHex("Vesting", 128) + xxhashAsHex("Vesting", 128).slice(2);
-            await insertOrNewMap(state, pkStorageItem, await transformVestingVestingInfo(fromApi, toApi, patriciaKey, value, atFromAsNumber, atToAsNumber));
+            await insertOrNewMap(state, pkStorageItem, await transformVestingVestingInfo(fromApi, toApi, patriciaKey, value, startAtAsNumber, atToAsNumber));
 
         } else {
             console.log("Fetched data that can not be transformed. PatriciaKey is: " + patriciaKey.toHuman());

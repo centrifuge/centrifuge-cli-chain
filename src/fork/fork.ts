@@ -124,7 +124,7 @@ async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<A
     // getKeysPaged does not work for StorageValues, lets try if it is one
     if (keyArray === undefined || keyArray.length === 0) {
         console.log("Fetched keys: 1");
-        let value = await api.rpc.state.getStorage(key);
+        let value = await api.rpc.state.getStorage(key, at);
 
         if (value !== undefined) {
             // @ts-ignore
@@ -163,7 +163,7 @@ async function fetchState(api: ApiPromise, at: Hash, key: StorageKey): Promise<A
 
     accumulate = 0;
     for (const storageKey of keyArray) {
-        let storageValue = await api.rpc.state.getStorage(storageKey);
+        let storageValue = await api.rpc.state.getStorage(storageKey, at);
         // @ts-ignore
         let storageArray = storageValue.toU8a(true);
 
